@@ -20,8 +20,10 @@ import com.hazelcast.config.Config;
 import com.hazelcast.config.XmlConfigBuilder;
 import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
+import com.hazelcast.core.IMap;
+import org.vertx.java.core.spi.cluster.AsyncMap;
 import org.vertx.java.core.spi.cluster.ClusterManager;
-import org.vertx.java.core.spi.cluster.MultiMap;
+import org.vertx.java.core.spi.cluster.AsyncMultiMap;
 import org.vertx.java.core.impl.VertxInternal;
 import org.vertx.java.core.logging.Logger;
 import org.vertx.java.core.logging.impl.LoggerFactory;
@@ -119,9 +121,9 @@ public class HazelcastClusterManager implements ClusterManager {
 	 *     additional MultiMap config parameters.
 	 * @return subscription map
 	 */
-  public <K, V> MultiMap<K, V> getMultiMap(final String name) {
+  public <K, V> AsyncMultiMap<K, V> getAsyncMultiMap(final String name) {
     com.hazelcast.core.MultiMap map = instance.getMultiMap(name);
-    return new HazelcastMultiMap(vertx, map);
+    return new HazelcastAsyncMultiMap(vertx, map);
   }
 
   @Override
@@ -140,8 +142,15 @@ public class HazelcastClusterManager implements ClusterManager {
   }
 
   @Override
-  public <K, V> Map<K, V> getMap(String name) {
-    return null;
+  public <K, V> AsyncMap<K, V> getAsyncMap(String name) {
+    IMap<K, V> map = instance.getMap(name);
+    return new HazelcastAsyncMap(vertx, map);
+  }
+
+  @Override
+  public <K, V> Map<K, V> getSyncMap(String name) {
+    IMap<K, V> map = instance.getMap(name);
+    return map;
   }
 
   /**

@@ -23,6 +23,8 @@ import org.vertx.java.core.Context;
 import org.vertx.java.core.Handler;
 import org.vertx.java.core.eventbus.EventBus;
 import org.vertx.java.core.eventbus.impl.DefaultEventBus;
+import org.vertx.java.core.spi.cluster.ClusterManager;
+import org.vertx.java.core.spi.cluster.ClusterManagerFactory;
 import org.vertx.java.core.spi.cluster.impl.hazelcast.HazelcastClusterManager;
 import org.vertx.java.core.file.FileSystem;
 import org.vertx.java.core.file.impl.DefaultFileSystem;
@@ -44,6 +46,7 @@ import org.vertx.java.core.sockjs.impl.DefaultSockJSServer;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.ServiceLoader;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -83,7 +86,12 @@ public class DefaultVertx implements VertxInternal {
   }
 
   public DefaultVertx(int port, String hostname) {
-    this.eventBus = new DefaultEventBus(this, port, hostname, new HazelcastClusterManager(this));
+    ServiceLoader<ClusterManagerFactory> factories = ServiceLoader.load(ClusterManagerFactory.class);
+    if (!factories.iterator().hasNext()) {
+      throw new IllegalStateException("No ClusterManagerFactory instances found on classpath");
+    }
+    ClusterManagerFactory factory = factories.iterator().next();
+    this.eventBus = new DefaultEventBus(this, port, hostname, factory.createClusterManager(this));
   }
 
   /**

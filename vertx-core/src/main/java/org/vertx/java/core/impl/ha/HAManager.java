@@ -1,13 +1,3 @@
-package org.vertx.java.core.impl.ha;
-
-import org.vertx.java.core.Handler;
-import org.vertx.java.core.json.JsonArray;
-import org.vertx.java.core.json.JsonObject;
-import org.vertx.java.core.spi.cluster.ClusterManager;
-import org.vertx.java.core.spi.cluster.NodeListener;
-
-import java.util.*;
-
 /*
  * Copyright 2013 Red Hat, Inc.
  *
@@ -23,6 +13,26 @@ import java.util.*;
  * License for the specific language governing permissions and limitations
  * under the License.
  *
+ */
+
+package org.vertx.java.core.impl.ha;
+
+import org.vertx.java.core.Handler;
+import org.vertx.java.core.json.JsonArray;
+import org.vertx.java.core.json.JsonObject;
+import org.vertx.java.core.spi.cluster.ClusterManager;
+import org.vertx.java.core.spi.cluster.NodeListener;
+
+import java.util.*;
+
+
+/**
+ *
+ * Handles HA
+ *
+ * This class should always be used from a worker thread - not an event loop, as it it does blocking stuff
+ *
+ * @author <a href="http://tfox.org">Tim Fox</a>
  */
 public class HAManager {
 
@@ -45,8 +55,9 @@ public class HAManager {
     haInfo.putString("group", group != null ? group : "_DEFAULT_");
     this.haMods = new JsonArray();
     haInfo.putArray("mods", haMods);
-    this.clusterMap = clusterManager.getMap(MAP_NAME);
+    this.clusterMap = clusterManager.getSyncMap(MAP_NAME);
     this.nodeID = clusterManager.getNodeID();
+    clusterManager.setNodeListener(listener);
   }
 
   private final NodeListener listener = new NodeListener() {

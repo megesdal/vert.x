@@ -25,9 +25,11 @@ import java.util.Map;
  */
 public interface ClusterManager {
 
-  <K, V> MultiMap<K, V> getMultiMap(String name);
+  <K, V> AsyncMultiMap<K, V> getAsyncMultiMap(String name);
 
-  <K, V> Map<K, V> getMap(String name);
+  <K, V> AsyncMap<K, V> getAsyncMap(String name);
+
+  <K, V> Map<K, V> getSyncMap(String name);
 
   String getNodeID();
 

@@ -39,7 +39,7 @@ import org.vertx.java.core.net.impl.ServerID;
 import org.vertx.java.core.parsetools.RecordParser;
 import org.vertx.java.core.impl.ChoosableSet;
 import org.vertx.java.core.spi.cluster.ClusterManager;
-import org.vertx.java.core.spi.cluster.MultiMap;
+import org.vertx.java.core.spi.cluster.AsyncMultiMap;
 
 import java.util.List;
 import java.util.Queue;
@@ -64,7 +64,7 @@ public class DefaultEventBus implements EventBus {
   private final VertxInternal vertx;
   private ServerID serverID;
   private NetServer server;
-  private MultiMap<String, ServerID> subs;
+  private AsyncMultiMap<String, ServerID> subs;
   private final ConcurrentMap<ServerID, ConnectionHolder> connections = new ConcurrentHashMap<>();
   private final ConcurrentMap<String, Handlers> handlerMap = new ConcurrentHashMap<>();
   private final AtomicInteger seq = new AtomicInteger(0);
@@ -89,7 +89,7 @@ public class DefaultEventBus implements EventBus {
                          AsyncResultHandler<Void> listenHandler) {
     this.vertx = vertx;
     this.clusterMgr = clusterManager;
-    this.subs = clusterMgr.getMultiMap("subs");
+    this.subs = clusterMgr.getAsyncMultiMap("subs");
     this.server = setServer(port, hostname, listenHandler);
     ManagementRegistry.registerEventBus(serverID);
   }
