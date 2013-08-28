@@ -37,6 +37,9 @@ import org.vertx.java.core.net.NetServer;
 import org.vertx.java.core.net.NetSocket;
 import org.vertx.java.core.net.impl.ServerID;
 import org.vertx.java.core.parsetools.RecordParser;
+import org.vertx.java.core.impl.ChoosableSet;
+import org.vertx.java.core.spi.cluster.ClusterManager;
+import org.vertx.java.core.spi.cluster.MultiMap;
 
 import java.util.List;
 import java.util.Queue;
@@ -61,7 +64,7 @@ public class DefaultEventBus implements EventBus {
   private final VertxInternal vertx;
   private ServerID serverID;
   private NetServer server;
-  private SubsMap subs;
+  private MultiMap<String, ServerID> subs;
   private final ConcurrentMap<ServerID, ConnectionHolder> connections = new ConcurrentHashMap<>();
   private final ConcurrentMap<String, Handlers> handlerMap = new ConcurrentHashMap<>();
   private final AtomicInteger seq = new AtomicInteger(0);
@@ -86,7 +89,7 @@ public class DefaultEventBus implements EventBus {
                          AsyncResultHandler<Void> listenHandler) {
     this.vertx = vertx;
     this.clusterMgr = clusterManager;
-    this.subs = clusterMgr.getSubsMap("subs");
+    this.subs = clusterMgr.getMultiMap("subs");
     this.server = setServer(port, hostname, listenHandler);
     ManagementRegistry.registerEventBus(serverID);
   }
@@ -454,7 +457,7 @@ public class DefaultEventBus implements EventBus {
     return server;
   }
 
-  private void sendToSubs(ServerIDs subs, BaseMessage message) {
+  private void sendToSubs(ChoosableSet<ServerID> subs, BaseMessage message) {
     if (message.send) {
       // Choose one
       ServerID sid = subs.choose();
@@ -496,10 +499,10 @@ public class DefaultEventBus implements EventBus {
         }
       } else {
         if (subs != null) {
-          subs.get(message.address, new AsyncResultHandler<ServerIDs>() {
-            public void handle(AsyncResult<ServerIDs> event) {
+          subs.get(message.address, new AsyncResultHandler<ChoosableSet<ServerID>>() {
+            public void handle(AsyncResult<ChoosableSet<ServerID>> event) {
               if (event.succeeded()) {
-                ServerIDs serverIDs = event.result();
+                ChoosableSet<ServerID> serverIDs = event.result();
                 if (!serverIDs.isEmpty()) {
                   sendToSubs(serverIDs, message);
                 } else {
@@ -556,7 +559,7 @@ public class DefaultEventBus implements EventBus {
       handlers.list.add(new HandlerHolder(handler, replyHandler, localOnly, context));
       if (subs != null && !replyHandler && !localOnly) {
         // Propagate the information
-        subs.put(address, serverID, completionHandler);
+        subs.add(address, serverID, completionHandler);
       } else {
         callCompletionHandler(completionHandler);
       }
@@ -578,7 +581,7 @@ public class DefaultEventBus implements EventBus {
 
   private void cleanSubsForServerID(ServerID theServerID) {
     if (subs != null) {
-      subs.removeAllForServerID(theServerID, new Handler<AsyncResult<Void>>() {
+      subs.removeAllForValue(theServerID, new Handler<AsyncResult<Void>>() {
         public void handle(AsyncResult<Void> event) {
         }
       });

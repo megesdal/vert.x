@@ -23,7 +23,7 @@ import org.vertx.java.core.Context;
 import org.vertx.java.core.Handler;
 import org.vertx.java.core.eventbus.EventBus;
 import org.vertx.java.core.eventbus.impl.DefaultEventBus;
-import org.vertx.java.core.eventbus.impl.hazelcast.HazelcastClusterManager;
+import org.vertx.java.core.spi.cluster.impl.hazelcast.HazelcastClusterManager;
 import org.vertx.java.core.file.FileSystem;
 import org.vertx.java.core.file.impl.DefaultFileSystem;
 import org.vertx.java.core.file.impl.WindowsFileSystem;
