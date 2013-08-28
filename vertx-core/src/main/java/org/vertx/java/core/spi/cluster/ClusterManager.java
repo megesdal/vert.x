@@ -21,6 +21,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
+ *
+ * A cluster provide for Vert.x must implement this interface.
+ *
  * @author <a href="http://tfox.org">Tim Fox</a>
  */
 public interface ClusterManager {
