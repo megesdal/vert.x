@@ -1,3 +1,5 @@
+package org.vertx.java.core.spi;
+
 /*
  * Copyright 2013 Red Hat, Inc.
  *
@@ -14,18 +16,6 @@
  * under the License.
  *
  */
-
-package org.vertx.java.core.spi.cluster;
-
-import org.vertx.java.core.spi.VertxSPI;
-
-
-/**
- *
- * A cluster provide for Vert.x must implement this interface.
- *
- * @author <a href="http://tfox.org">Tim Fox</a>
- */
-public interface ClusterManagerFactory {
-  ClusterManager createClusterManager(VertxSPI vertx);
+public interface Action<T> {
+  T perform();
 }

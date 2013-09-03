@@ -161,6 +161,12 @@ public class Starter {
     return pm;
   }
 
+  private PlatformManager createPM(int port, String host, int quorumSize, String haGroup) {
+    PlatformManager pm =  PlatformLocator.factory.createPlatformManager(port, host, quorumSize, haGroup);
+    registerExitHandler(pm);
+    return pm;
+  }
+
   private void registerExitHandler(PlatformManager mgr) {
     mgr.registerExitHandler(new VoidHandler() {
       public void handle() {
@@ -170,7 +176,8 @@ public class Starter {
   }
 
   private void runVerticle(boolean zip, boolean module, String main, Args args) {
-    boolean clustered = args.map.get("-cluster") != null;
+    boolean ha = args.map.get("-ha") != null;
+    boolean clustered = ha || args.map.get("-cluster") != null;
     PlatformManager mgr;
     if (clustered) {
       log.info("Starting clustering...");
@@ -189,7 +196,14 @@ public class Starter {
           log.info("No cluster-host specified so using address " + clusterHost);
         }
       }
-      mgr = createPM(clusterPort, clusterHost);
+      if (ha) {
+        String sQuorumSize = args.map.get("-quorum");
+        String haGroup = args.map.get("-hagroup");
+        int quorumSize = sQuorumSize == null ? 0 : Integer.valueOf(sQuorumSize);
+        mgr = createPM(clusterPort, clusterHost, quorumSize, haGroup);
+      } else {
+        mgr = createPM(clusterPort, clusterHost);
+      }
     } else {
       mgr = createPM();
     }
@@ -272,6 +286,8 @@ public class Starter {
     } else if (module) {
       if (hasClasspath) {
         mgr.deployModuleFromClasspath(main, conf, instances, classpath, createLoggingHandler("Successfully deployed module", doneHandler));
+      } else if (ha) {
+        mgr.deployModule(main, conf, instances, true, createLoggingHandler("Successfully deployed module", doneHandler));
       } else {
         mgr.deployModule(main, conf, instances, createLoggingHandler("Successfully deployed module", doneHandler));
       }
@@ -327,6 +343,9 @@ public class Starter {
             //OK - can get spurious wakeups
           }
         }
+        System.out.println("Shutdown hooks done!");
+        // Now shutdown the platform manager
+        mgr.stop();
       }
     });
   }

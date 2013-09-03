@@ -19,10 +19,10 @@ package org.vertx.java.core.spi.cluster.impl.hazelcast;
 import com.hazelcast.config.Config;
 import com.hazelcast.config.XmlConfigBuilder;
 import com.hazelcast.core.*;
+import org.vertx.java.core.spi.VertxSPI;
 import org.vertx.java.core.spi.cluster.AsyncMap;
 import org.vertx.java.core.spi.cluster.ClusterManager;
 import org.vertx.java.core.spi.cluster.AsyncMultiMap;
-import org.vertx.java.core.impl.VertxInternal;
 import org.vertx.java.core.logging.Logger;
 import org.vertx.java.core.logging.impl.LoggerFactory;
 import org.vertx.java.core.spi.cluster.NodeListener;
@@ -47,7 +47,7 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
   private static final String CONFIG_FILE = "cluster.xml";
 
   private final HazelcastInstance hazelcast;
-  private final VertxInternal vertx;
+  private final VertxSPI vertx;
 
   private final String nodeID;
   private NodeListener nodeListener;
@@ -55,14 +55,18 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
   /**
    * Constructor
    */
-  public HazelcastClusterManager(final VertxInternal vertx) {
+  public HazelcastClusterManager(final VertxSPI vertx) {
   	this.vertx = vertx;
+    // We have our own shutdown hook and need to ensure ours runs before Hazelcast is shutdown
+    System.setProperty("hazelcast.shutdownhook.enabled", "false");
     Config cfg = getConfig(null);
     if (cfg == null) {
       log.warn("Cannot find cluster.xml on classpath. Using default cluster configuration");
     }
     hazelcast = Hazelcast.newHazelcastInstance(cfg);
     nodeID = hazelcast.getCluster().getLocalMember().getUuid();
+    System.out.println("This node id is " + nodeID);
+    hazelcast.getCluster().addMembershipListener(this);
   }
 
 	/**
@@ -116,22 +120,33 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
    * Because it implements a singleton, close() needs to be a noop
    */
   public void close() {
+    System.out.println("Closing hazelcastclustermanager");
  		hazelcast.getLifecycleService().shutdown();
   }
 
   @Override
   public void memberAdded(MembershipEvent membershipEvent) {
-    if (nodeListener != null) {
-      Member member = membershipEvent.getMember();
-      nodeListener.nodeAdded(member.getUuid());
+    try {
+      System.out.println("Hazelcast memberadded: " + membershipEvent);
+      if (nodeListener != null) {
+        Member member = membershipEvent.getMember();
+        nodeListener.nodeAdded(member.getUuid());
+      }
+    } catch (Throwable t) {
+      log.error("Failed to handle memberAdded", t);
     }
   }
 
   @Override
   public void memberRemoved(MembershipEvent membershipEvent) {
-    if (nodeListener != null) {
-      Member member = membershipEvent.getMember();
-      nodeListener.nodeLeft(member.getUuid());
+    try {
+      System.out.println("Hazelcast memberRemoved: " + membershipEvent);
+      if (nodeListener != null) {
+        Member member = membershipEvent.getMember();
+        nodeListener.nodeLeft(member.getUuid());
+      }
+    } catch (Throwable t) {
+      log.error("Failed to handle memberRemoved", t);
     }
   }
 

@@ -20,11 +20,12 @@ package org.vertx.java.core.impl.ha;
 import org.vertx.java.core.Handler;
 import org.vertx.java.core.json.JsonArray;
 import org.vertx.java.core.json.JsonObject;
+import org.vertx.java.core.logging.Logger;
+import org.vertx.java.core.logging.impl.LoggerFactory;
 import org.vertx.java.core.spi.cluster.ClusterManager;
 import org.vertx.java.core.spi.cluster.NodeListener;
 
 import java.util.*;
-
 
 /**
  *
@@ -36,13 +37,15 @@ import java.util.*;
  */
 public class HAManager {
 
+  private static final Logger log = LoggerFactory.getLogger(HAManager.class);
   private static final String MAP_NAME = "__vertx.clusterMap";
 
   private final ClusterManager clusterManager;
   private final int quorumSize;
+  private final String group;
   private final JsonObject haInfo;
   private final JsonArray haMods;
-  private final Map<String, JsonObject> clusterMap;
+  private final Map<String, String> clusterMap;
   private final String nodeID;
   private boolean attainedQuorum;
   private Handler<Boolean> quorumHandler;
@@ -51,10 +54,11 @@ public class HAManager {
   public HAManager(ClusterManager clusterManager, int quorumSize, String group) {
     this.clusterManager = clusterManager;
     this.quorumSize = quorumSize;
+    this.group = group;
     this.haInfo = new JsonObject();
-    haInfo.putString("group", group != null ? group : "_DEFAULT_");
     this.haMods = new JsonArray();
     haInfo.putArray("mods", haMods);
+    haInfo.putString("group", group == null ? "__DEFAULT__" : group);
     this.clusterMap = clusterManager.getSyncMap(MAP_NAME);
     this.nodeID = clusterManager.getNodeID();
     clusterManager.setNodeListener(listener);
@@ -63,18 +67,22 @@ public class HAManager {
   private final NodeListener listener = new NodeListener() {
     @Override
     public void nodeAdded(String nodeID) {
+      System.out.println("A node has been added to the cluster: " + nodeID);
       checkQuorum();
     }
 
     @Override
     public void nodeLeft(String leftNodeID) {
+      System.out.println("A node has left the cluster: " + nodeID);
       checkQuorum();
       if (attainedQuorum) {
-        JsonObject clusterInfo = clusterMap.get(leftNodeID);
-        if (clusterInfo == null) {
+        System.out.println("There is a quorum");
+        String sclusterInfo = clusterMap.get(leftNodeID);
+        if (sclusterInfo == null) {
           // Clean close - do nothing
+          System.out.println("Clean close! No action required");
         } else {
-          checkFailover(leftNodeID, clusterInfo);
+          checkFailover(leftNodeID, new JsonObject(sclusterInfo));
         }
       }
     }
@@ -88,29 +96,38 @@ public class HAManager {
     this.failoverHandler = failoverHandler;
   }
 
-  public void addToHA(String moduleName, JsonObject conf, int instances, String group) {
-    JsonObject moduleConf = new JsonObject().putString("module_name", moduleName);
+  public void addToHA(String deploymentID, String moduleName, JsonObject conf, int instances) {
+    JsonObject moduleConf = new JsonObject().putString("dep_id", deploymentID);
+    moduleConf.putString("module_name", moduleName);
     if (conf == null) {
       conf = new JsonObject();
     }
     moduleConf.putObject("conf", conf);
     moduleConf.putNumber("instances", instances);
     haMods.addObject(moduleConf);
-    clusterMap.put(nodeID, haInfo);
+    clusterMap.put(nodeID, haInfo.encode());
   }
 
-  public void removeFromHA(String moduleName, JsonObject conf, int instances) {
+  public void removeFromHA(String depID) {
+    System.out.println("Removing dep from HA: " + depID);
     Iterator<Object> iter = haMods.iterator();
+    System.out.println("Iterating through mods");
     while (iter.hasNext()) {
       Object obj = iter.next();
       JsonObject mod = (JsonObject)obj;
-      if (mod.getString("module_name").equals(moduleName) &&
-          mod.getObject("conf").equals(conf) &&
-          mod.getNumber("instances") == instances) {
+      System.out.println("Looking at mod " + mod.getString("module_name"));
+      System.out.println("dep id is " + mod.getString("dep_id"));
+      if (mod.getString("dep_id").equals(depID)) {
+        System.out.println("It's equal");
         iter.remove();
+        System.out.println("Removed it");
       }
     }
-    clusterMap.put(nodeID, haInfo);
+    clusterMap.put(nodeID, haInfo.encode());
+  }
+
+  public void stop() {
+    clusterMap.remove(nodeID);
   }
 
   private void checkQuorum() {
@@ -131,16 +148,21 @@ public class HAManager {
   Consequently it's crucial that the calculation done in chooseHashedNode takes place only locally
    */
   private void checkFailover(String failedNodeID, JsonObject theHAInfo) {
+    System.out.println("Checking failover for failed node: " + failedNodeID);
     JsonArray apps = theHAInfo.getArray("mods");
     String group = theHAInfo.getString("group");
+    System.out.println("Got apps: " + apps);
     if (apps != null) {
       for (Object obj: apps) {
         JsonObject app = (JsonObject)obj;
         String moduleName = app.getString("module_name");
+        System.out.println("Checking module " + moduleName);
         String chosen = chooseHashedNode(group, moduleName.hashCode());
+        System.out.println("Chosen is " + chosen);
         if (chosen != null && chosen.equals(this.nodeID)) {
           System.out.println("node " + nodeID + " is handling failure of app " + moduleName + " from node " + failedNodeID);
           failoverHandler.handle(app);
+          //TODO when should we remove the app from the clusterInfo of the old node?
           break;
         }
       }
@@ -151,10 +173,11 @@ public class HAManager {
     List<String> nodes = clusterManager.getNodes();
     ArrayList<String> matchingMembers = new ArrayList<>();
     for (String node: nodes) {
-      JsonObject clusterInfo = clusterMap.get(node);
-      if (clusterInfo == null) {
+      String sclusterInfo = clusterMap.get(node);
+      if (sclusterInfo == null) {
         throw new IllegalStateException("Can't find node in map");
       }
+      JsonObject clusterInfo = new JsonObject(sclusterInfo);
       String memberGroup = clusterInfo.getString("group");
       if (group.equals(memberGroup)) {
         matchingMembers.add(node);

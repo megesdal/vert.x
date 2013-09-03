@@ -3,11 +3,9 @@ package org.vertx.java.core.spi.cluster.impl.hazelcast;
 import com.hazelcast.core.IMap;
 import org.vertx.java.core.AsyncResult;
 import org.vertx.java.core.Handler;
-import org.vertx.java.core.impl.BlockingAction;
-import org.vertx.java.core.impl.VertxInternal;
+import org.vertx.java.core.spi.Action;
+import org.vertx.java.core.spi.VertxSPI;
 import org.vertx.java.core.spi.cluster.AsyncMap;
-
-import java.util.Map;
 
 /*
  * Copyright 2013 Red Hat, Inc.
@@ -27,40 +25,40 @@ import java.util.Map;
  */
 public class HazelcastAsyncMap<K, V> implements AsyncMap<K, V> {
 
-  private final VertxInternal vertx;
+  private final VertxSPI vertx;
   private final IMap<K, V> map;
 
-  public HazelcastAsyncMap(VertxInternal vertx, IMap<K, V> map) {
+  public HazelcastAsyncMap(VertxSPI vertx, IMap<K, V> map) {
     this.vertx = vertx;
     this.map = map;
   }
 
   @Override
   public void get(final K k, Handler<AsyncResult<V>> asyncResultHandler) {
-    new BlockingAction<V>(vertx, asyncResultHandler) {
-      public V action() {
+    vertx.executeBlocking(new Action<V>() {
+      public V perform() {
         return map.get(k);
       }
-    }.run();
+    }, asyncResultHandler);
   }
 
   @Override
   public void put(final K k, final V v, Handler<AsyncResult<Void>> completionHandler) {
-    new BlockingAction<Void>(vertx, completionHandler) {
-      public Void action() {
-        map.put(k, v);
+    vertx.executeBlocking(new Action<Void>() {
+      public Void perform() {
+        map.put(k, HazelcastServerID.convertServerID(v));
         return null;
       }
-    }.run();
+    }, completionHandler);
   }
 
   @Override
   public void remove(final K k, Handler<AsyncResult<Void>> completionHandler) {
-    new BlockingAction<Void>(vertx, completionHandler) {
-      public Void action() {
+    vertx.executeBlocking(new Action<Void>() {
+      public Void perform() {
         map.remove(k);
         return null;
       }
-    }.run();
+    }, completionHandler);
   }
 }

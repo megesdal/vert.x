@@ -17,7 +17,7 @@
 
 package org.vertx.java.core.spi.cluster.impl.hazelcast;
 
-import org.vertx.java.core.impl.VertxInternal;
+import org.vertx.java.core.spi.VertxSPI;
 import org.vertx.java.core.spi.cluster.ClusterManager;
 import org.vertx.java.core.spi.cluster.ClusterManagerFactory;
 
@@ -28,7 +28,7 @@ import org.vertx.java.core.spi.cluster.ClusterManagerFactory;
 public class HazelcastClusterManagerFactory implements ClusterManagerFactory {
 
   @Override
-  public ClusterManager createClusterManager(VertxInternal vertx) {
+  public ClusterManager createClusterManager(VertxSPI vertx) {
     return new HazelcastClusterManager(vertx);
   }
 }

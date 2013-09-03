@@ -15,17 +15,16 @@
  *
  */
 
-package org.vertx.java.core.spi.cluster;
+package org.vertx.java.core.spi;
 
-import org.vertx.java.core.spi.VertxSPI;
-
+import org.vertx.java.core.AsyncResult;
+import org.vertx.java.core.Handler;
+import org.vertx.java.core.Vertx;
 
 /**
- *
- * A cluster provide for Vert.x must implement this interface.
- *
- * @author <a href="http://tfox.org">Tim Fox</a>
+ *  @author <a href="http://tfox.org">Tim Fox</a>
  */
-public interface ClusterManagerFactory {
-  ClusterManager createClusterManager(VertxSPI vertx);
+public interface VertxSPI extends Vertx {
+
+  <T> void executeBlocking(Action<T> action, Handler<AsyncResult<T>> resultHandler);
 }

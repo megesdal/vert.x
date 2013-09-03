@@ -23,9 +23,9 @@ import org.vertx.java.core.Context;
 import org.vertx.java.core.Handler;
 import org.vertx.java.core.eventbus.EventBus;
 import org.vertx.java.core.eventbus.impl.DefaultEventBus;
+import org.vertx.java.core.spi.Action;
 import org.vertx.java.core.spi.cluster.ClusterManager;
 import org.vertx.java.core.spi.cluster.ClusterManagerFactory;
-import org.vertx.java.core.spi.cluster.impl.hazelcast.HazelcastClusterManager;
 import org.vertx.java.core.file.FileSystem;
 import org.vertx.java.core.file.impl.DefaultFileSystem;
 import org.vertx.java.core.file.impl.WindowsFileSystem;
@@ -76,9 +76,11 @@ public class DefaultVertx implements VertxInternal {
 
   private final ConcurrentMap<Long, InternalTimerHandler> timeouts = new ConcurrentHashMap<>();
   private final AtomicLong timeoutCounter = new AtomicLong(0);
+  private final ClusterManager clusterManager;
 
   public DefaultVertx() {
     this.eventBus = new DefaultEventBus(this);
+    this.clusterManager = null;
   }
 
   public DefaultVertx(String hostname) {
@@ -91,7 +93,8 @@ public class DefaultVertx implements VertxInternal {
       throw new IllegalStateException("No ClusterManagerFactory instances found on classpath");
     }
     ClusterManagerFactory factory = factories.iterator().next();
-    this.eventBus = new DefaultEventBus(this, port, hostname, factory.createClusterManager(this));
+    this.clusterManager = factory.createClusterManager(this);
+    this.eventBus = new DefaultEventBus(this, port, hostname, clusterManager);
   }
 
   /**
@@ -313,7 +316,37 @@ public class DefaultVertx implements VertxInternal {
       eventLoopGroup = null;
     }
 
+    eventBus.close(null);
+
     setContext(null);
+  }
+
+  @Override
+  public <T> void executeBlocking(final Action<T> action, final Handler<AsyncResult<T>> resultHandler) {
+    final DefaultContext context = getOrCreateContext();
+
+    Runnable runner = new Runnable() {
+      public void run() {
+        final DefaultFutureResult<T> res = new DefaultFutureResult<>();
+        try {
+          T result = action.perform();
+          res.setResult(result);
+        } catch (Exception e) {
+          res.setFailure(e);
+        }
+        context.execute(new Runnable() {
+            public void run() {
+              res.setHandler(resultHandler);
+            }
+          });
+      }
+    };
+
+    context.executeOnOrderedWorkerExec(runner);
+  }
+
+  public ClusterManager clusterManager() {
+    return clusterManager;
   }
 
   private class InternalTimerHandler implements Runnable, Closeable {

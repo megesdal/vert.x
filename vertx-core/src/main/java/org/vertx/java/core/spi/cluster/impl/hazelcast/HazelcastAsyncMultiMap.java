@@ -22,10 +22,10 @@ import org.vertx.java.core.AsyncResult;
 import org.vertx.java.core.AsyncResultHandler;
 import org.vertx.java.core.Handler;
 import org.vertx.java.core.impl.ChoosableSet;
+import org.vertx.java.core.spi.Action;
+import org.vertx.java.core.spi.VertxSPI;
 import org.vertx.java.core.spi.cluster.AsyncMultiMap;
-import org.vertx.java.core.impl.BlockingAction;
 import org.vertx.java.core.impl.DefaultFutureResult;
-import org.vertx.java.core.impl.VertxInternal;
 import org.vertx.java.core.logging.Logger;
 import org.vertx.java.core.logging.impl.LoggerFactory;
 
@@ -41,7 +41,7 @@ public class HazelcastAsyncMultiMap<K, V> implements AsyncMultiMap<K, V>, EntryL
 
   private static final Logger log = LoggerFactory.getLogger(HazelcastAsyncMultiMap.class);
 
-  private final VertxInternal vertx;
+  private final VertxSPI vertx;
   private final com.hazelcast.core.MultiMap<K, V> map;
 
   //TODO need to optimise this for DataSerializable
@@ -58,87 +58,89 @@ public class HazelcastAsyncMultiMap<K, V> implements AsyncMultiMap<K, V>, EntryL
     */
   private ConcurrentMap<K, ChoosableSet<V>> cache = new ConcurrentHashMap<>();
 
-  public HazelcastAsyncMultiMap(VertxInternal vertx, com.hazelcast.core.MultiMap<K, V> map) {
+  public HazelcastAsyncMultiMap(VertxSPI vertx, com.hazelcast.core.MultiMap<K, V> map) {
     this.vertx = vertx;
     this.map = map;
     map.addEntryListener(this, true);
   }
 
   @Override
-  public void removeAllForValue(final V v, final Handler<AsyncResult<Void>> completionHandler) {
-    new BlockingAction<Void>(vertx, completionHandler) {
-      public Void action() {
-        for (Map.Entry<K, V> entry: map.entrySet()) {
+  public void removeAllForValue(final V val, final Handler<AsyncResult<Void>> completionHandler) {
+    vertx.executeBlocking(new Action<Void>() {
+      public Void perform() {
+        for (Map.Entry<K, V> entry : map.entrySet()) {
           V v = entry.getValue();
-          if (v.equals(v)) {
+          if (val.equals(v)) {
             map.remove(entry.getKey(), v);
           }
         }
         return null;
       }
-    }.run();
+    }, completionHandler);
   }
 
   @Override
   public void add(final K k, final V v, final Handler<AsyncResult<Void>> completionHandler) {
-    new BlockingAction<Void>(vertx, completionHandler) {
-      public Void action() {
-        map.put(k, v);
+    vertx.executeBlocking(new Action<Void>() {
+      public Void perform() {
+        map.put(k, HazelcastServerID.convertServerID(v));
         return null;
       }
-    }.run();
+    }, completionHandler);
   }
 
   @Override
-  public void get(final K k, final Handler<AsyncResult<ChoosableSet<V>>> completionHandler) {
+  public void get(final K k, final Handler<AsyncResult<ChoosableSet<V>>> resultHandler) {
     ChoosableSet<V> entries = cache.get(k);
     DefaultFutureResult<ChoosableSet<V>> result = new DefaultFutureResult<>();
     if (entries != null && entries.isInitialised()) {
-      result.setResult(entries).setHandler(completionHandler);
+      result.setResult(entries).setHandler(resultHandler);
     } else {
-      new BlockingAction<Collection<V>>(vertx, new AsyncResultHandler<Collection<V>>() {
-        public void handle(AsyncResult<Collection<V>> result) {
-          DefaultFutureResult<ChoosableSet<V>> sresult = new DefaultFutureResult<>();
-          if (result.succeeded()) {
-            Collection<V> entries = result.result();
-            ChoosableSet<V> sids;
-            if (entries != null) {
-              sids = new ChoosableSet<>(entries.size());
-              for (V hid: entries) {
-                sids.add(hid);
-              }
-            } else {
-              sids = new ChoosableSet<>(0);
-            }
-            ChoosableSet<V> prev = cache.putIfAbsent(k, sids);
-            if (prev != null) {
-              // Merge them
-              prev.merge(sids);
-              sids = prev;
-            }
-            sids.setInitialised();
-            sresult.setResult(sids);
-          } else {
-            sresult.setFailure(result.cause());
+      vertx.executeBlocking(new Action<Collection<V>>() {
+          public Collection<V> perform() {
+            return map.get(k);
           }
-          sresult.setHandler(completionHandler);
+        }, new AsyncResultHandler<Collection<V>>() {
+          public void handle(AsyncResult<Collection<V>> result) {
+            DefaultFutureResult<ChoosableSet<V>> sresult = new DefaultFutureResult<>();
+            if (result.succeeded()) {
+              Collection<V> entries = result.result();
+              ChoosableSet<V> sids;
+              if (entries != null) {
+                sids = new ChoosableSet<>(entries.size());
+                for (V hid : entries) {
+                  sids.add(hid);
+                }
+              } else {
+                sids = new ChoosableSet<>(0);
+              }
+              ChoosableSet<V> prev = cache.putIfAbsent(k, sids);
+              if (prev != null) {
+                // Merge them
+                prev.merge(sids);
+                sids = prev;
+              }
+              sids.setInitialised();
+              sresult.setResult(sids);
+            } else {
+              sresult.setFailure(result.cause());
+            }
+            sresult.setHandler(resultHandler);
+          }
         }
-      }) {
-        public Collection<V> action() {
-          return map.get(k);
-        }
-      }.run();
+      );
     }
   }
 
   @Override
   public void remove(final K k, final V v, final Handler<AsyncResult<Void>> completionHandler) {
-    new BlockingAction<Void>(vertx, completionHandler) {
-      public Void action() {
+
+    vertx.executeBlocking(new Action<Void>() {
+      public Void perform() {
         map.remove(k, v);
         return null;
       }
-    }.run();
+    }, completionHandler);
   }
 
   @Override

@@ -24,10 +24,12 @@ import org.vertx.java.core.Vertx;
 import org.vertx.java.core.file.impl.ClasspathPathResolver;
 import org.vertx.java.core.file.impl.ModuleFileSystemPathResolver;
 import org.vertx.java.core.impl.*;
+import org.vertx.java.core.impl.ha.HAManager;
 import org.vertx.java.core.json.DecodeException;
 import org.vertx.java.core.json.JsonObject;
 import org.vertx.java.core.logging.Logger;
 import org.vertx.java.core.logging.impl.LoggerFactory;
+import org.vertx.java.core.spi.cluster.ClusterManager;
 import org.vertx.java.platform.PlatformManagerException;
 import org.vertx.java.platform.Verticle;
 import org.vertx.java.platform.VerticleFactory;
@@ -47,7 +49,6 @@ import java.util.zip.ZipInputStream;
 
 /**
  *
- * This class could benefit from some refactoring
  *
  * @author <a href="http://tfox.org">Tim Fox</a>
  *
@@ -83,6 +84,8 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
   private Handler<Void> exitHandler;
   private final ClassLoader platformClassLoader;
   private final boolean disableMavenLocal;
+  private final ClusterManager clusterManager;
+  private HAManager haManager;
 
   DefaultPlatformManager() {
     this(new DefaultVertx());
@@ -96,9 +99,40 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
     this(new DefaultVertx(port, hostname));
   }
 
+  DefaultPlatformManager(int port, String hostname, int quorumSize, String haGroup) {
+    this(new DefaultVertx(port, hostname));
+    this.haManager = new HAManager(clusterManager, quorumSize, haGroup);
+    haManager.failoverHandler(new Handler<JsonObject>() {
+      @Override
+      public void handle(JsonObject failedModule) {
+        final String moduleName = failedModule.getString("module_name");
+        log.info("Handling failover for node " + moduleName);
+        // Now deploy this module on this node
+        deployModule(moduleName, failedModule.getObject("config"), failedModule.getInteger("instances"), true, new Handler<AsyncResult<String>>() {
+          @Override
+          public void handle(AsyncResult<String> result) {
+            if (result.succeeded()) {
+              log.info("Successfully redeployed module " + moduleName + " after failover");
+            } else {
+              log.error("Failed to redeploy module after failover", result.cause());
+            }
+          }
+        });
+      }
+    });
+    haManager.quorumHandler(new Handler<Boolean>() {
+      @Override
+      public void handle(Boolean attained) {
+
+      }
+    });
+  }
+
   private DefaultPlatformManager(DefaultVertx vertx) {
     this.platformClassLoader = Thread.currentThread().getContextClassLoader();
     this.vertx = new WrappedVertx(vertx);
+    this.clusterManager = vertx.clusterManager();
+
     String modDir = System.getProperty(MODS_DIR_PROP_NAME);
     if (modDir != null && !modDir.trim().equals("")) {
       modRoot = new File(modDir);
@@ -148,9 +182,37 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
     runInBackground(new Runnable() {
       public void run() {
         ModuleIdentifier modID = new ModuleIdentifier(moduleName);
-        deployModuleFromFileSystem(modRoot, false, null, modID, config, instances, currentModDir, wrapped);
+        deployModuleFromFileSystem(modRoot, false, null, modID, config, instances, currentModDir, false, wrapped);
       }
     }, wrapped);
+  }
+
+  @Override
+  public void deployModule(final String moduleName, final JsonObject config, final int instances, final boolean ha,
+                           final Handler<AsyncResult<String>> doneHandler) {
+    final File currentModDir = getDeploymentModDir();
+    System.out.println("Calling deploymodule, ha: " + ha);
+    final Handler<AsyncResult<String>> wrappedHandler = new Handler<AsyncResult<String>>() {
+      @Override
+      public void handle(AsyncResult<String> asyncResult) {
+        if (asyncResult.succeeded() && ha && haManager != null) {
+          // Tell the other nodes of the cluster about the module for HA purposes
+          log.info("Adding module to HA " + moduleName);
+          haManager.addToHA(asyncResult.result(), moduleName, config, instances);
+        }
+        if (doneHandler != null) {
+          doneHandler.handle(asyncResult);
+        } else if (asyncResult.failed()) {
+          vertx.reportException(asyncResult.cause());
+        }
+      }
+    };
+    runInBackground(new Runnable() {
+      public void run() {
+        ModuleIdentifier modID = new ModuleIdentifier(moduleName);
+        deployModuleFromFileSystem(modRoot, false, null, modID, config, instances, currentModDir, true, wrappedHandler);
+      }
+    }, wrappedHandler);
   }
 
   public void deployModuleFromClasspath(final String moduleName, final JsonObject config,
@@ -166,6 +228,7 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
   }
 
   public synchronized void undeploy(final String deploymentID, final Handler<AsyncResult<Void>> doneHandler) {
+    System.out.println("Undeploying: " + deploymentID);
     runInBackground(new Runnable() {
       public void run() {
         if (deploymentID == null) {
@@ -177,8 +240,15 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
         }
         Handler<AsyncResult<Void>> wrappedHandler = wrapDoneHandler(new Handler<AsyncResult<Void>>() {
           public void handle(AsyncResult<Void> res) {
-            if (res.succeeded() && dep.modID != null && dep.autoRedeploy) {
-              redeployer.moduleUndeployed(dep);
+            if (res.succeeded()) {
+              System.out.println("Undeploy succeeded, ha " + dep.ha + " hamanager: " + haManager);
+              if (dep.modID != null && dep.autoRedeploy) {
+                redeployer.moduleUndeployed(dep);
+              }
+              if (dep.ha && haManager != null) {
+                System.out.println("Removing module " + dep.modID + " from HA");
+                haManager.removeFromHA(deploymentID);
+              }
             }
             if (doneHandler != null) {
               doneHandler.handle(res);
@@ -315,7 +385,7 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
         tempDir.mkdirs();
         unzipModuleData(tempDir, info, false);
         // And run it from there
-        deployModuleFromFileSystem(modRoot, false, null, modID, config, instances, null, wrapped);
+        deployModuleFromFileSystem(modRoot, false, null, modID, config, instances, null, false, wrapped);
       }
     }, wrapped);
   }
@@ -342,7 +412,7 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
         if (deployment.modDir != null) {
           deployModuleFromFileSystem(modRoot, true, deployment.name, deployment.modID, deployment.config,
               deployment.instances,
-              null, null);
+              null, deployment.ha, null);
         } else {
           deployModuleFromCP(true, deployment.name, deployment.modID, deployment.config, deployment.instances, deployment.classpath, null);
         }
@@ -568,7 +638,7 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
     if (includes != null) {
       loadIncludedModules(modRoot, currentModDir, mr, includes);
     }
-    doDeploy(depName, false, worker, multiThreaded, main, null, config, urls, instances, currentModDir, mr, modRoot,
+    doDeploy(depName, false, worker, multiThreaded, main, null, config, urls, instances, currentModDir, mr, modRoot, false,
         doneHandler);
   }
 
@@ -695,6 +765,7 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
                                        File currentModDir,
                                        List<URL> moduleClasspath,
                                        File modRoot,
+                                       boolean ha,
                                        final Handler<AsyncResult<String>> doneHandler) {
     ModuleFields fields = new ModuleFields(modJSON);
     String main = fields.getMain();
@@ -741,7 +812,7 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
 
     doDeploy(depName, autoRedeploy, worker, multiThreaded, main, modID, config,
         moduleClasspath.toArray(new URL[moduleClasspath.size()]), instances, modDirToUse, mr,
-        modRoot, new Handler<AsyncResult<String>>() {
+        modRoot, ha, new Handler<AsyncResult<String>>() {
       @Override
       public void handle(AsyncResult<String> res) {
         if (res.succeeded()) {
@@ -794,14 +865,14 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
       // Add the module directory too if found
       cpList.addAll(getModuleClasspath(modDir));
     }
-    deployModuleFromModJson(redeploy, modJSON, depName, modID, config, instances, null, null, cpList, modRoot,
+    deployModuleFromModJson(redeploy, modJSON, depName, modID, config, instances, null, null, cpList, modRoot, false,
         doneHandler);
   }
 
 
   private void deployModuleFromFileSystem(File modRoot, boolean redeploy, String depName, ModuleIdentifier modID,
                                           JsonObject config,
-                                          int instances, File currentModDir,
+                                          int instances, File currentModDir, boolean ha,
                                           Handler<AsyncResult<String>> doneHandler) {
     checkWorkerContext();
     File modDir = locateModule(modRoot, currentModDir, modID);
@@ -810,7 +881,7 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
       JsonObject modJSON = loadModuleConfig(modID, modDir);
       List<URL> urls = getModuleClasspath(modDir);
       deployModuleFromModJson(redeploy, modJSON, depName, modID, config, instances, modDir, currentModDir, urls,
-          modRoot, doneHandler);
+          modRoot, ha, doneHandler);
     } else {
       JsonObject modJSON;
       if (modID.toString().equals(MODULE_NAME_SYS_PROP)) {
@@ -824,11 +895,11 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
       }
       if (modJSON != null) {
         deployModuleFromModJson(redeploy, modJSON, depName, modID, config, instances, modDir, currentModDir,
-            new ArrayList<URL>(), modRoot, doneHandler);
+            new ArrayList<URL>(), modRoot, ha, doneHandler);
       } else {
         // Try and install it then deploy from file system
         doInstallMod(modID);
-        deployModuleFromFileSystem(modRoot, redeploy, depName, modID, config, instances, currentModDir, doneHandler);
+        deployModuleFromFileSystem(modRoot, redeploy, depName, modID, config, instances, currentModDir, ha, doneHandler);
       }
     }
   }
@@ -1148,6 +1219,7 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
                         final File modDir,
                         final ModuleReference mr,
                         final File modRoot,
+                        final boolean ha,
                         Handler<AsyncResult<String>> dHandler) {
     checkWorkerContext();
 
@@ -1253,7 +1325,7 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
 
     final Deployment deployment = new Deployment(deploymentID, main, modID, instances,
         config == null ? new JsonObject() : config.copy(), urls, modDir, parentDeploymentName,
-        mr, autoRedeploy);
+        mr, autoRedeploy, ha);
     mr.incRef();
     deployments.put(deploymentID, deployment);
 
