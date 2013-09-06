@@ -17,10 +17,7 @@
 package org.vertx.java.platform.impl;
 
 
-import org.vertx.java.core.AsyncResult;
-import org.vertx.java.core.AsyncResultHandler;
-import org.vertx.java.core.Handler;
-import org.vertx.java.core.Vertx;
+import org.vertx.java.core.*;
 import org.vertx.java.core.file.impl.ClasspathPathResolver;
 import org.vertx.java.core.file.impl.ModuleFileSystemPathResolver;
 import org.vertx.java.core.impl.*;
@@ -44,6 +41,9 @@ import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -71,7 +71,7 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
 
   private final VertxInternal vertx;
   // deployment name --> deployment
-  private final Map<String, Deployment> deployments = new ConcurrentHashMap<>();
+  protected final Map<String, Deployment> deployments = new ConcurrentHashMap<>();
   // The user mods dir
   private final File modRoot;
   private final File systemModRoot;
@@ -84,40 +84,29 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
   private Handler<Void> exitHandler;
   private final ClassLoader platformClassLoader;
   private final boolean disableMavenLocal;
-  private final ClusterManager clusterManager;
-  private HAManager haManager;
+  protected final ClusterManager clusterManager;
+  protected HAManager haManager;
+  private boolean stopped;
 
-  DefaultPlatformManager() {
+  protected DefaultPlatformManager() {
     this(new DefaultVertx());
   }
 
-  DefaultPlatformManager(String hostname) {
+  protected DefaultPlatformManager(String hostname) {
     this(new DefaultVertx(hostname));
   }
 
-  DefaultPlatformManager(int port, String hostname) {
+  protected DefaultPlatformManager(int port, String hostname) {
     this(new DefaultVertx(port, hostname));
   }
 
-  DefaultPlatformManager(int port, String hostname, int quorumSize, String haGroup) {
+  protected DefaultPlatformManager(int port, String hostname, int quorumSize, String haGroup) {
     this(new DefaultVertx(port, hostname));
     this.haManager = new HAManager(clusterManager, quorumSize, haGroup);
     haManager.failoverHandler(new Handler<JsonObject>() {
       @Override
       public void handle(JsonObject failedModule) {
-        final String moduleName = failedModule.getString("module_name");
-        log.info("Handling failover for node " + moduleName);
-        // Now deploy this module on this node
-        deployModule(moduleName, failedModule.getObject("config"), failedModule.getInteger("instances"), true, new Handler<AsyncResult<String>>() {
-          @Override
-          public void handle(AsyncResult<String> result) {
-            if (result.succeeded()) {
-              log.info("Successfully redeployed module " + moduleName + " after failover");
-            } else {
-              log.error("Failed to redeploy module after failover", result.cause());
-            }
-          }
-        });
+        handleFailover(failedModule);
       }
     });
     haManager.quorumHandler(new Handler<Boolean>() {
@@ -191,13 +180,11 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
   public void deployModule(final String moduleName, final JsonObject config, final int instances, final boolean ha,
                            final Handler<AsyncResult<String>> doneHandler) {
     final File currentModDir = getDeploymentModDir();
-    System.out.println("Calling deploymodule, ha: " + ha);
     final Handler<AsyncResult<String>> wrappedHandler = new Handler<AsyncResult<String>>() {
       @Override
       public void handle(AsyncResult<String> asyncResult) {
         if (asyncResult.succeeded() && ha && haManager != null) {
           // Tell the other nodes of the cluster about the module for HA purposes
-          log.info("Adding module to HA " + moduleName);
           haManager.addToHA(asyncResult.result(), moduleName, config, instances);
         }
         if (doneHandler != null) {
@@ -228,7 +215,6 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
   }
 
   public synchronized void undeploy(final String deploymentID, final Handler<AsyncResult<Void>> doneHandler) {
-    System.out.println("Undeploying: " + deploymentID);
     runInBackground(new Runnable() {
       public void run() {
         if (deploymentID == null) {
@@ -241,19 +227,18 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
         Handler<AsyncResult<Void>> wrappedHandler = wrapDoneHandler(new Handler<AsyncResult<Void>>() {
           public void handle(AsyncResult<Void> res) {
             if (res.succeeded()) {
-              System.out.println("Undeploy succeeded, ha " + dep.ha + " hamanager: " + haManager);
               if (dep.modID != null && dep.autoRedeploy) {
                 redeployer.moduleUndeployed(dep);
               }
               if (dep.ha && haManager != null) {
-                System.out.println("Removing module " + dep.modID + " from HA");
                 haManager.removeFromHA(deploymentID);
               }
             }
             if (doneHandler != null) {
               doneHandler.handle(res);
             } else if (res.failed()) {
-              log.error("Failed to undeploy", res.cause());;
+              log.error("Failed to undeploy", res.cause());
+              ;
             }
           }
         });
@@ -300,7 +285,7 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
       public void run() {
         ModuleIdentifier modID = new ModuleIdentifier(moduleName);
         doInstallMod(modID);
-        doneHandler.handle(new DefaultFutureResult<>((Void)null));
+        doneHandler.handle(new DefaultFutureResult<>((Void) null));
       }
     }, wrapped);
   }
@@ -316,7 +301,7 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
         } else {
           vertx.fileSystem().deleteSync(modDir.getAbsolutePath(), true);
         }
-        doneHandler.handle(new DefaultFutureResult<>((Void)null));
+        doneHandler.handle(new DefaultFutureResult<>((Void) null));
       }
     }, wrapped);
   }
@@ -327,7 +312,7 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
       public void run() {
         ModuleIdentifier modID = new ModuleIdentifier(moduleName); // Validates it
         doPullInDependencies(modRoot, modID);
-        doneHandler.handle(new DefaultFutureResult<>((Void)null));
+        doneHandler.handle(new DefaultFutureResult<>((Void) null));
       }
     }, wrapped);
   }
@@ -1327,6 +1312,7 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
         config == null ? new JsonObject() : config.copy(), urls, modDir, parentDeploymentName,
         mr, autoRedeploy, ha);
     mr.incRef();
+
     deployments.put(deploymentID, deployment);
 
     ClassLoader oldTCCL = Thread.currentThread().getContextClassLoader();
@@ -1491,9 +1477,50 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
     });
   }
 
+  protected void handleFailover(JsonObject failedModule) {
+    // This method must block until the failover is complete - i.e. the module is successfully redeployed
+    final String moduleName = failedModule.getString("module_name");
+    final CountDownLatch latch = new CountDownLatch(1);
+    final AtomicReference<Throwable> err = new AtomicReference<>();
+    // Now deploy this module on this node
+    deployModule(moduleName, failedModule.getObject("conf"), failedModule.getInteger("instances"), true, new Handler<AsyncResult<String>>() {
+      @Override
+      public void handle(AsyncResult<String> result) {
+        if (result.succeeded()) {
+          log.info("Successfully redeployed module " + moduleName + " after failover");
+        } else {
+          log.error("Failed to redeploy module after failover", result.cause());
+          err.set(result.cause());
+        }
+        latch.countDown();
+        Throwable t = err.get();
+        if (t != null) {
+          throw new PlatformManagerException(t);
+        }
+      }
+    });
+    while (true) {
+      try {
+        if (!latch.await(10, TimeUnit.SECONDS)) {
+          throw new VertxException("Timed out waiting for redeploy on failover");
+        }
+        break;
+      } catch (InterruptedException e) {
+        // Ignore - spurious wakeups can occur
+      }
+    }
+  }
+
   public void stop() {
+    if (stopped) {
+      return;
+    }
+    if (haManager != null) {
+      haManager.stop();
+    }
     redeployer.close();
     vertx.stop();
+    stopped = true;
   }
 
   // For debug only

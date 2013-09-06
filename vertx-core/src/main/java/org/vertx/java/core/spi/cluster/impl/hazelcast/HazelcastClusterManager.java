@@ -46,10 +46,11 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
   // Hazelcast config file
   private static final String CONFIG_FILE = "cluster.xml";
 
-  private final HazelcastInstance hazelcast;
+
   private final VertxSPI vertx;
 
-  private final String nodeID;
+  private HazelcastInstance hazelcast;
+  private String nodeID;
   private NodeListener nodeListener;
 
   /**
@@ -59,6 +60,9 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
   	this.vertx = vertx;
     // We have our own shutdown hook and need to ensure ours runs before Hazelcast is shutdown
     System.setProperty("hazelcast.shutdownhook.enabled", "false");
+  }
+
+  public void join() {
     Config cfg = getConfig(null);
     if (cfg == null) {
       log.warn("Cannot find cluster.xml on classpath. Using default cluster configuration");
@@ -116,11 +120,9 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
     return map;
   }
 
-  /**
-   * Because it implements a singleton, close() needs to be a noop
-   */
-  public void close() {
+  public void leave() {
     System.out.println("Closing hazelcastclustermanager");
+    hazelcast.getCluster().removeMembershipListener(this);
  		hazelcast.getLifecycleService().shutdown();
   }
 

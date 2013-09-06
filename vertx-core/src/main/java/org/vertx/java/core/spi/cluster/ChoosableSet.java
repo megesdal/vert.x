@@ -1,4 +1,6 @@
-package org.vertx.java.core.impl;
+package org.vertx.java.core.spi.cluster;
+
+import org.vertx.java.core.impl.ConcurrentHashSet;
 
 import java.util.Iterator;
 import java.util.NoSuchElementException;

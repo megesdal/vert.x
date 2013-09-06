@@ -37,7 +37,7 @@ import org.vertx.java.core.net.NetServer;
 import org.vertx.java.core.net.NetSocket;
 import org.vertx.java.core.net.impl.ServerID;
 import org.vertx.java.core.parsetools.RecordParser;
-import org.vertx.java.core.impl.ChoosableSet;
+import org.vertx.java.core.spi.cluster.ChoosableSet;
 import org.vertx.java.core.spi.cluster.ClusterManager;
 import org.vertx.java.core.spi.cluster.AsyncMultiMap;
 
@@ -361,7 +361,7 @@ public class DefaultEventBus implements EventBus {
   @Override
   public void close(Handler<AsyncResult<Void>> doneHandler) {
 		if (clusterMgr != null) {
-			clusterMgr.close();
+			clusterMgr.leave();
 		}
 		if (server != null) {
 			server.close(doneHandler);
@@ -503,7 +503,7 @@ public class DefaultEventBus implements EventBus {
             public void handle(AsyncResult<ChoosableSet<ServerID>> event) {
               if (event.succeeded()) {
                 ChoosableSet<ServerID> serverIDs = event.result();
-                if (!serverIDs.isEmpty()) {
+                if (serverIDs != null && !serverIDs.isEmpty()) {
                   sendToSubs(serverIDs, message);
                 } else {
                   receiveMessage(message);

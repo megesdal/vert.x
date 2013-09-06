@@ -94,6 +94,7 @@ public class DefaultVertx implements VertxInternal {
     }
     ClusterManagerFactory factory = factories.iterator().next();
     this.clusterManager = factory.createClusterManager(this);
+    this.clusterManager.join();
     this.eventBus = new DefaultEventBus(this, port, hostname, clusterManager);
   }
 

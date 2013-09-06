@@ -1,4 +1,4 @@
-package org.vertx.java.tests.container;
+package org.vertx.java.tests.platform;
 
 import org.vertx.java.core.buffer.Buffer;
 import org.vertx.java.core.impl.ConcurrentHashSet;

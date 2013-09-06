@@ -328,8 +328,10 @@ public class Starter {
     Runtime.getRuntime().addShutdownHook(new Thread() {
       public void run() {
         final CountDownLatch latch = new CountDownLatch(1);
+        System.out.println("Undeploying all!");
         mgr.undeployAll(new Handler<AsyncResult<Void>>() {
           public void handle(AsyncResult<Void> res) {
+            System.out.println("Undeployed all");
             latch.countDown();
           }
         });

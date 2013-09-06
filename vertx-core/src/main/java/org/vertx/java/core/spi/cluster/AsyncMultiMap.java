@@ -18,7 +18,6 @@ package org.vertx.java.core.spi.cluster;
 
 import org.vertx.java.core.AsyncResult;
 import org.vertx.java.core.Handler;
-import org.vertx.java.core.impl.ChoosableSet;
 
 /**
  * @author <a href="http://tfox.org">Tim Fox</a>

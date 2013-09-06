@@ -50,6 +50,7 @@ public class HAManager {
   private boolean attainedQuorum;
   private Handler<Boolean> quorumHandler;
   private Handler<JsonObject> failoverHandler;
+  private Handler<Boolean> failoverCompleteHandler;
 
   public HAManager(ClusterManager clusterManager, int quorumSize, String group) {
     this.clusterManager = clusterManager;
@@ -62,27 +63,36 @@ public class HAManager {
     this.clusterMap = clusterManager.getSyncMap(MAP_NAME);
     this.nodeID = clusterManager.getNodeID();
     clusterManager.setNodeListener(listener);
+    clusterMap.put(nodeID, haInfo.encode());
   }
+
 
   private final NodeListener listener = new NodeListener() {
     @Override
     public void nodeAdded(String nodeID) {
-      System.out.println("A node has been added to the cluster: " + nodeID);
       checkQuorum();
     }
 
     @Override
     public void nodeLeft(String leftNodeID) {
-      System.out.println("A node has left the cluster: " + nodeID);
       checkQuorum();
       if (attainedQuorum) {
-        System.out.println("There is a quorum");
         String sclusterInfo = clusterMap.get(leftNodeID);
         if (sclusterInfo == null) {
           // Clean close - do nothing
-          System.out.println("Clean close! No action required");
         } else {
           checkFailover(leftNodeID, new JsonObject(sclusterInfo));
+        }
+
+        // We also check for and potentially resume any previous failovers that might have failed
+        // We can determine this if there any ids in the clustermap which aren't in the node list
+        Collection<String> clusterMapNodes = clusterMap.keySet();
+        List<String> nodes = clusterManager.getNodes();
+
+        for (Map.Entry<String, String> entry: clusterMap.entrySet()) {
+          if (!nodes.contains(entry.getKey())) {
+            checkFailover(entry.getKey(), new JsonObject(entry.getValue()));
+          }
         }
       }
     }
@@ -96,31 +106,28 @@ public class HAManager {
     this.failoverHandler = failoverHandler;
   }
 
+  public void failoverCompleteHandler(Handler<Boolean> failoverCompleteHandler) {
+    this.failoverCompleteHandler = failoverCompleteHandler;
+  }
+
   public void addToHA(String deploymentID, String moduleName, JsonObject conf, int instances) {
     JsonObject moduleConf = new JsonObject().putString("dep_id", deploymentID);
     moduleConf.putString("module_name", moduleName);
-    if (conf == null) {
-      conf = new JsonObject();
+    if (conf != null) {
+      moduleConf.putObject("conf", conf);
     }
-    moduleConf.putObject("conf", conf);
     moduleConf.putNumber("instances", instances);
     haMods.addObject(moduleConf);
     clusterMap.put(nodeID, haInfo.encode());
   }
 
   public void removeFromHA(String depID) {
-    System.out.println("Removing dep from HA: " + depID);
     Iterator<Object> iter = haMods.iterator();
-    System.out.println("Iterating through mods");
     while (iter.hasNext()) {
       Object obj = iter.next();
       JsonObject mod = (JsonObject)obj;
-      System.out.println("Looking at mod " + mod.getString("module_name"));
-      System.out.println("dep id is " + mod.getString("dep_id"));
       if (mod.getString("dep_id").equals(depID)) {
-        System.out.println("It's equal");
         iter.remove();
-        System.out.println("Removed it");
       }
     }
     clusterMap.put(nodeID, haInfo.encode());
@@ -148,27 +155,39 @@ public class HAManager {
   Consequently it's crucial that the calculation done in chooseHashedNode takes place only locally
    */
   private void checkFailover(String failedNodeID, JsonObject theHAInfo) {
-    System.out.println("Checking failover for failed node: " + failedNodeID);
-    JsonArray apps = theHAInfo.getArray("mods");
-    String group = theHAInfo.getString("group");
-    System.out.println("Got apps: " + apps);
-    if (apps != null) {
-      for (Object obj: apps) {
-        JsonObject app = (JsonObject)obj;
-        String moduleName = app.getString("module_name");
-        System.out.println("Checking module " + moduleName);
-        String chosen = chooseHashedNode(group, moduleName.hashCode());
-        System.out.println("Chosen is " + chosen);
-        if (chosen != null && chosen.equals(this.nodeID)) {
-          System.out.println("node " + nodeID + " is handling failure of app " + moduleName + " from node " + failedNodeID);
-          failoverHandler.handle(app);
-          //TODO when should we remove the app from the clusterInfo of the old node?
-          break;
+    try {
+      JsonArray apps = theHAInfo.getArray("mods");
+      String group = theHAInfo.getString("group");
+      String chosen = chooseHashedNode(group, failedNodeID.hashCode());
+      if (chosen != null && chosen.equals(this.nodeID)) {
+        log.info("Node " + failedNodeID + " has failed. This node will deploy " + apps.size() + " deployments from that node.");
+        if (apps != null) {
+          for (Object obj: apps) {
+            JsonObject app = (JsonObject)obj;
+            failoverHandler.handle(app);
+          }
         }
+        // Failover is complete! We can now remove the failed node from the cluster map
+        clusterMap.remove(failedNodeID);
+        if (failoverCompleteHandler != null) {
+          failoverCompleteHandler.handle(true);
+        }
+      }
+    } catch (Throwable t) {
+      log.error("Failed to handle failover", t);
+      if (failoverCompleteHandler != null) {
+        failoverCompleteHandler.handle(false);
       }
     }
   }
 
+  /*
+  We use the hashcode of the failed nodeid to choose a node to failover onto.
+  Each node is guaranteed to see the exact list of nodes in the cluster for the exact same membership event
+  Therefore each node will compute the same value.
+  If the computed node equals the current node, the node knows that it is the one to handle failover for the
+  deployment
+   */
   private String chooseHashedNode(String group, int hashCode) {
     List<String> nodes = clusterManager.getNodes();
     ArrayList<String> matchingMembers = new ArrayList<>();
@@ -184,8 +203,10 @@ public class HAManager {
       }
     }
     if (!matchingMembers.isEmpty()) {
-      int pos = hashCode % matchingMembers.size();
-      return matchingMembers.get(pos);
+      // Hashcodes can be -ve so make it positive
+      long absHash = (long)hashCode + Integer.MAX_VALUE;
+      long lpos = absHash % matchingMembers.size();
+      return matchingMembers.get((int)lpos);
     } else {
       return null;
     }

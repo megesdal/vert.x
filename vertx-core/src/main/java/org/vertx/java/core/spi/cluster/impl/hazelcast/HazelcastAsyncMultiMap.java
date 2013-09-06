@@ -21,7 +21,7 @@ import com.hazelcast.core.EntryListener;
 import org.vertx.java.core.AsyncResult;
 import org.vertx.java.core.AsyncResultHandler;
 import org.vertx.java.core.Handler;
-import org.vertx.java.core.impl.ChoosableSet;
+import org.vertx.java.core.spi.cluster.ChoosableSet;
 import org.vertx.java.core.spi.Action;
 import org.vertx.java.core.spi.VertxSPI;
 import org.vertx.java.core.spi.cluster.AsyncMultiMap;

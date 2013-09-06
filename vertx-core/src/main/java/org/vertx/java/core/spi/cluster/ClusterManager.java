@@ -40,8 +40,7 @@ public interface ClusterManager {
 
   void setNodeListener(NodeListener listener);
 
-  /**
-   * Shutdown the cluster manager and release all resources.
-   */
-  void close();
+  void join();
+
+  void leave();
 }
