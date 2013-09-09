@@ -32,7 +32,7 @@ public class HATest extends TestCase {
 
   protected void setUp() throws Exception {
     super.setUp();
-    System.setProperty("vertx.mods", "src/test/mod-test");
+    System.setProperty("vertx.mods", "vertx-testsuite/src/test/mod-test");
   }
 
   protected void tearDown() throws Exception {
@@ -267,11 +267,11 @@ public class HATest extends TestCase {
     cluster.closeCluster();
   }
 
-  public void testFailureDuringFailover() throws Exception{
+  public void testFailureDuringFailover() throws Exception {
     Cluster cluster = new Cluster(3);
     cluster.createCluster();
-    cluster.pms.get(1).failDuringFailover = true;
-    cluster.pms.get(2).failDuringFailover = true;
+    cluster.pms.get(1).failDuringFailover(true);
+    cluster.pms.get(2).failDuringFailover(true);
     cluster.deployMods(0, new NodeMods().addDeployment(new DepInfo("io.vertx~ha-test1~1.0", 6, new JsonObject().putString("foo", "bar"))));
 
     // -1 means failover failed
@@ -279,10 +279,33 @@ public class HATest extends TestCase {
 
     // Next time we won't fail during failover - the next failover should take over the previous failed node which
     // was in limbo
-    cluster.pms.get(1).failDuringFailover = false;
+    cluster.pms.get(1).failDuringFailover(false);
     assertEquals(0, cluster.killNode(0));
 
     cluster.closeCluster();
+  }
+
+  public void testSimpleQuorum() throws Exception {
+    Cluster cluster = new Cluster();
+    cluster.nodes.add(new NodeMods("group1", 2));
+    cluster.createCluster();
+
+    NodeMods mods = new NodeMods().addDeployment(new DepInfo("io.vertx~ha-test1~1.0"));
+    cluster.deployModsNoCheck(0, mods);
+
+    Thread.sleep(500);
+    // Make sure it doesn't deploy yet - we don't have a quorum
+    assertTrue(cluster.pms.get(0).getDeployments().isEmpty());
+
+    // Now deploy another node
+    cluster.addNode(new NodeMods("group1", 2));
+
+    Thread.sleep(500);
+
+    // Should now be deployed
+    cluster.checkModulesDeployed(0, mods);
+
+    //cluster.nodes.add(new NodeMods("group1", 2));
   }
 
   class Cluster {
@@ -301,8 +324,13 @@ public class HATest extends TestCase {
     void createCluster() {
       pms = new ArrayList<>();
       for (NodeMods node: nodes) {
-        pms.add(new TestPlatformManager(0, "localhost", 0, node.group));
+        pms.add(new TestPlatformManager(0, "localhost", node.quorumSize, node.group));
       }
+    }
+
+    void addNode(NodeMods node) {
+      nodes.add(node);
+      pms.add(new TestPlatformManager(0, "localhost", node.quorumSize, node.group));
     }
 
     void deployMods(int node, NodeMods nodeMods) throws Exception {
@@ -322,11 +350,30 @@ public class HATest extends TestCase {
         });
       }
       assertTrue(latch.await(10, TimeUnit.SECONDS));
+      checkModulesDeployed(node, nodeMods);
+    }
+
+    void deployModsNoCheck(int node, NodeMods nodeMods) throws Exception {
+      TestPlatformManager pm = pms.get(node);
+      for (DepInfo dep: nodeMods.deployments) {
+        pm.deployModule(dep.modName, dep.config, dep.instances, true, new Handler<AsyncResult<String>>() {
+          @Override
+          public void handle(AsyncResult<String> res) {
+            if (!res.succeeded()) {
+              res.cause().printStackTrace();
+              fail("Failed to deploy module");
+            }
+          }
+        });
+      }
+    }
+
+    void checkModulesDeployed(int node, NodeMods nodeMods) throws Exception {
       NodeMods existingMods = nodes.get(node);
       existingMods.deployments.addAll(nodeMods.deployments);
       for (int i = 0; i < pms.size(); i++) {
         NodeMods mods = nodes.get(i);
-        pm = pms.get(i);
+        TestPlatformManager pm = pms.get(i);
         assertEquals(mods.deployments.size(), pm.getDeployments().size());
         for (DepInfo dep: mods.deployments) {
           assertTrue(hasModule(dep.modName, pm.getDeployments()));
@@ -424,6 +471,7 @@ public class HATest extends TestCase {
   class NodeMods {
     List<DepInfo> deployments = new ArrayList<>();
     String group;
+    int quorumSize;
 
     NodeMods() {
       this(null);
@@ -431,6 +479,11 @@ public class HATest extends TestCase {
 
     NodeMods(String group) {
       this.group = group;
+    }
+
+    NodeMods(String group, int quorumSize) {
+      this.group = group;
+      this.quorumSize = quorumSize;
     }
 
     NodeMods addDeployment(DepInfo dep) {

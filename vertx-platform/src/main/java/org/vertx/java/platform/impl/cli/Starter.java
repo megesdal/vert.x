@@ -335,15 +335,12 @@ public class Starter {
             latch.countDown();
           }
         });
-        while (true) {
-          try {
-            if (!latch.await(30, TimeUnit.SECONDS)) {
-              log.error("Timed out waiting to undeploy");
-            }
-            break;
-          } catch (InterruptedException e) {
-            //OK - can get spurious wakeups
+        try {
+          if (!latch.await(30, TimeUnit.SECONDS)) {
+            log.error("Timed out waiting to undeploy");
           }
+        } catch (InterruptedException e) {
+          throw new IllegalStateException(e);
         }
         System.out.println("Shutdown hooks done!");
         // Now shutdown the platform manager

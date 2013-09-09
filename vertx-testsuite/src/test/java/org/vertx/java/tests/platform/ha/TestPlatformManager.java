@@ -30,14 +30,8 @@ public class TestPlatformManager extends DefaultPlatformManager {
     super(port, hostname, quorumSize, haGroup);
   }
 
-  boolean failDuringFailover;
-
-  @Override
-  protected void handleFailover(JsonObject failedModule) {
-    if (failDuringFailover) {
-      throw new VertxException("Ooops!");
-    }
-    super.handleFailover(failedModule);
+  void failDuringFailover(boolean fail) {
+    haManager.failDuringFailover(fail);
   }
 
   public void simulateKill() {
