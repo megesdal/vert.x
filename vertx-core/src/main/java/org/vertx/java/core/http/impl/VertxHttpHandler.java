@@ -37,7 +37,6 @@ import java.util.Map;
 /**
  * @author <a href="mailto:nmaurer@redhat.com">Norman Maurer</a>
  */
-
 public abstract class VertxHttpHandler<C extends ConnectionBase> extends VertxHandler<C> {
   private final VertxInternal vertx;
 
