@@ -98,7 +98,7 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
 
   protected DefaultPlatformManager(int port, String hostname, int quorumSize, String haGroup) {
     this(new DefaultVertx(port, hostname));
-    this.haManager = new HAManager(this, clusterManager, quorumSize, haGroup);
+    this.haManager = new HAManager(vertx, this, clusterManager, quorumSize, haGroup);
   }
 
   private DefaultPlatformManager(DefaultVertx vertx) {
@@ -807,6 +807,7 @@ public class DefaultPlatformManager implements PlatformManagerInternal, ModuleRe
           }
         }
         if (doneHandler != null) {
+
           doneHandler.handle(res);
         } else if (res.failed()) {
           log.error("Failed to deploy", res.cause());

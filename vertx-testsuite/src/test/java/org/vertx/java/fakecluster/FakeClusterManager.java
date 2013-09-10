@@ -59,19 +59,13 @@ public class FakeClusterManager implements ClusterManager {
     for (NodeListener listener: nodeListeners) {
       listener.nodeAdded(nodeID);
     }
-    //System.out.println("Node " + nodeID + " has joined the cluster");
   }
 
   private static synchronized void doLeave(String nodeID) {
-    //System.out.println("Calling leave for node " + nodeID);
     if (!nodes.containsKey(nodeID)) {
       throw new IllegalStateException("Node hasn't joined!");
     }
     nodes.remove(nodeID);
-//    System.out.println("After node leaving there are the following nodes");
-//    for (String node: nodes.keySet()) {
-//      System.out.println("Node:" + node);
-//    }
     for (NodeListener listener: nodeListeners) {
       listener.nodeLeft(nodeID);
     }
@@ -144,7 +138,7 @@ public class FakeClusterManager implements ClusterManager {
   }
 
   @Override
-  public void setNodeListener(NodeListener listener) {
+  public void nodeListener(NodeListener listener) {
     doAddNodeListener(listener);
     this.nodeListener = listener;
   }

@@ -70,7 +70,6 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
     hazelcast = Hazelcast.newHazelcastInstance(cfg);
     nodeID = hazelcast.getCluster().getLocalMember().getUuid();
     System.out.println("This node id is " + nodeID);
-    hazelcast.getCluster().addMembershipListener(this);
   }
 
 	/**
@@ -104,7 +103,7 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
   }
 
   @Override
-  public void setNodeListener(NodeListener listener) {
+  public void nodeListener(NodeListener listener) {
     this.nodeListener = listener;
   }
 

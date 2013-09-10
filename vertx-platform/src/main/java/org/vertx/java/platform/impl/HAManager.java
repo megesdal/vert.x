@@ -17,10 +17,9 @@
 
 package org.vertx.java.platform.impl;
 
-import org.vertx.java.core.AsyncResult;
-import org.vertx.java.core.AsyncResultHandler;
-import org.vertx.java.core.Handler;
-import org.vertx.java.core.VertxException;
+import org.vertx.java.core.*;
+import org.vertx.java.core.impl.DefaultContext;
+import org.vertx.java.core.impl.VertxInternal;
 import org.vertx.java.core.json.JsonArray;
 import org.vertx.java.core.json.JsonObject;
 import org.vertx.java.core.logging.Logger;
@@ -29,8 +28,8 @@ import org.vertx.java.core.spi.cluster.ClusterManager;
 import org.vertx.java.core.spi.cluster.NodeListener;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -38,15 +37,71 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * Handles HA
  *
- * This class should always be used from a worker thread - not an event loop, as it it does blocking stuff
+ * We compute failover and whether there is a quorum synchronously as we receive nodeAdded and nodeRemoved events
+ * from the cluster manager.
+ *
+ * It's vital that this is done synchronously as the cluster manager only guarantees that the set of nodes retrieved
+ * from getNodes() is the same for each node in the cluster when processing the exact same nodeAdded/nodeRemoved
+ * event.
+ *
+ * As HA modules are deployed, if a quorum has been attained they are deployed immediately, otherwise the deployment
+ * information is added to a list.
+ *
+ * Periodically we check the value of attainedQuorum and if true we deploy any HA deployments waiting for a quorum.
+ *
+ * If false, we check if there are any HA deployments current deployed, and if so undeploy them, and add them to the list
+ * of deployments waiting for a quorum.
+ *
+ * By doing this check periodically we can avoid race conditions resulting in modules being deployed after a quorum has
+ * been lost, and without having to resort to exclusive locking which is actually quite tricky here, and prone to
+ * deadlock·
+ *
+ * We maintain a clustered map where the key is the node id and the value is some stringified JSON which describes
+ * the group of the cluster and an array of the HA modules deployed on that node.
+ *
+ * There is an entry in the map for each node of the cluster.
+ *
+ * When a node joins the cluster or an HA module is deployed or undeployed that entry is updated.
+ *
+ * When a node leaves the cluster cleanly, it removes it's own entry before leaving.
+ *
+ * When the cluster manager sends us an event to say a node has left the cluster we check if its entry in the cluster
+ * map is there, and if so we infer a clean close has happened and no failover will occur.
+ *
+ * If the map entry is there it implies the node died suddenly. In that case each node of the cluster must compute
+ * whether it is the failover node for the failed node.
+ *
+ * First each node of the cluster determines whether it is in the same group as the failed node, if not then it will not
+ * be a candidate for the failover node. Nodes in the cluster only failover to other nodes in the same group.
+ *
+ * If the node is in the same group then the node takes the UUID of the failed node, computes the hash-code and chooses
+ * a node from the list of nodes in the cluster by taking the hash-code modulo the number of nodes as an index to the
+ * list of nodes.
+ *
+ * The cluster manager guarantees each node in the cluster sees the same set of nodes for each membership event that is
+ * processed. Therefore it is guaranteed that each node in the cluster will compute the same value. It is critical that
+ * any cluster manager implementation provides this guarantee!
+ *
+ * Once the value has been computed, it is compared to the current node, and if it is the same the current node
+ * assumes failover for the failed node.
+ *
+ * During failover the failover node deploys all the HA modules from the failed node, as described in the JSON with the
+ * same values of config and instances.
+ *
+ * Once failover is complete the failover node removes the cluster map entry for the failed node.
+ *
+ * If the failover node itself fails while it is processing failover for another node, then this is also checked by
+ * other nodes when they detect the failure of the second node.
  *
  * @author <a href="http://tfox.org">Tim Fox</a>
  */
 public class HAManager {
 
   private static final Logger log = LoggerFactory.getLogger(HAManager.class);
-  private static final String MAP_NAME = "__vertx.clusterMap";
+  private static final String CLUSTER_MAP_NAME = "__vertx.haInfo";
+  private static final long QUORUM_CHECK_PERIOD = 1000;
 
+  private final VertxInternal vertx;
   private final PlatformManagerInternal platformManager;
   private final ClusterManager clusterManager;
   private final int quorumSize;
@@ -55,16 +110,15 @@ public class HAManager {
   private final JsonArray haMods;
   private final Map<String, String> clusterMap;
   private final String nodeID;
-  private final List<Runnable> toDeployOnQuorum = new ArrayList<>();
-  private boolean attainedQuorum;
-  private Handler<Boolean> failoverCompleteHandler;
-  private boolean failDuringFailover;
+  private final Queue<Runnable> toDeployOnQuorum = new ConcurrentLinkedQueue<>();
+  private long quorumTimerID;
+  private volatile boolean attainedQuorum;
+  private volatile Handler<Boolean> failoverCompleteHandler;
+  private volatile boolean failDuringFailover;
+  private volatile boolean stopped;
 
-  // We use a semaphore to ensure that HA modules aren't deployed at the same time as modules are undeployed
-  // due to quorum being los, which might result in modules being active when no quorum
-  private final Semaphore sem = new Semaphore(1);
-
-  public HAManager(PlatformManagerInternal platformManager, ClusterManager clusterManager, int quorumSize, String group) {
+  public HAManager(VertxInternal vertx, PlatformManagerInternal platformManager, ClusterManager clusterManager, int quorumSize, String group) {
+    this.vertx = vertx;
     this.platformManager = platformManager;
     this.clusterManager = clusterManager;
     this.quorumSize = quorumSize;
@@ -73,9 +127,9 @@ public class HAManager {
     this.haMods = new JsonArray();
     haInfo.putArray("mods", haMods);
     haInfo.putString("group", group == null ? "__DEFAULT__" : group);
-    this.clusterMap = clusterManager.getSyncMap(MAP_NAME);
+    this.clusterMap = clusterManager.getSyncMap(CLUSTER_MAP_NAME);
     this.nodeID = clusterManager.getNodeID();
-    clusterManager.setNodeListener(new NodeListener() {
+    clusterManager.nodeListener(new NodeListener() {
       @Override
       public void nodeAdded(String nodeID) {
         HAManager.this.nodeAdded(nodeID);
@@ -87,12 +141,13 @@ public class HAManager {
       }
     });
     clusterMap.put(nodeID, haInfo.encode());
-    attainedQuorum = quorumSize == 0;
-  }
-
-  // Set a handler that will be called when failover is complete - used in testing
-  public void failoverCompleteHandler(Handler<Boolean> failoverCompleteHandler) {
-    this.failoverCompleteHandler = failoverCompleteHandler;
+    attainedQuorum = quorumSize <= 1;
+    quorumTimerID = vertx.setPeriodic(QUORUM_CHECK_PERIOD, new Handler<Long>() {
+      @Override
+      public void handle(Long timerID) {
+        checkHADeployments();
+      }
+    });
   }
 
   // Remove the information on the deployment from the cluster - this is called when an HA module is undeployed
@@ -109,15 +164,9 @@ public class HAManager {
   }
 
   // Deploy an HA module
-  public synchronized void deployModule(final String moduleName, final JsonObject config, final int instances,
+  public void deployModule(final String moduleName, final JsonObject config, final int instances,
                                         final Handler<AsyncResult<String>> doneHandler) {
-
     if (attainedQuorum) {
-      try {
-        sem.acquire();
-      } catch (InterruptedException e) {
-        throw new IllegalStateException(e);
-      }
       final Handler<AsyncResult<String>> wrappedHandler = new Handler<AsyncResult<String>>() {
         @Override
         public void handle(AsyncResult<String> asyncResult) {
@@ -130,7 +179,6 @@ public class HAManager {
           } else if (asyncResult.failed()) {
             log.error("Failed to deploy module", asyncResult.cause());
           }
-          sem.release();
         }
       };
       platformManager.deployModuleInternal(moduleName, config, instances, true, wrappedHandler);
@@ -142,20 +190,31 @@ public class HAManager {
 
   public void stop() {
     clusterMap.remove(nodeID);
+    vertx.cancelTimer(quorumTimerID);
+    stopped = true;
   }
 
+  // Set a handler that will be called when failover is complete - used in testing
+  public void failoverCompleteHandler(Handler<Boolean> failoverCompleteHandler) {
+    this.failoverCompleteHandler = failoverCompleteHandler;
+  }
+
+  // For testing:
   public void failDuringFailover(boolean fail) {
     failDuringFailover = fail;
   }
 
   // A node has joined the cluster
-  private void nodeAdded(String nodeID) {
-    System.out.println("Node has been added");
-    checkQuorum();
+  // synchronize this in case the cluster manager is naughty and calls it concurrently
+  private synchronized void nodeAdded(final String nodeID) {
+     // This is not ideal but we need to wait for the group information to appear - and this will be shortly
+    // after the node has been added
+    checkQuorumWhenAdded(nodeID, System.currentTimeMillis());
   }
 
   // A node has left the cluster
-  private void nodeLeft(String leftNodeID) {
+  // synchronize this in case the cluster manager is naughty and calls it concurrently
+  private synchronized void nodeLeft(String leftNodeID) {
     checkQuorum();
     if (attainedQuorum) {
 
@@ -180,15 +239,37 @@ public class HAManager {
     }
   }
 
-  // Check if there is a quorum for our group
-  private synchronized void checkQuorum() {
+  private void checkQuorumWhenAdded(final String nodeID, final long start) {
+    if (clusterMap.containsKey(nodeID)) {
+      checkQuorum();
+    } else {
+      vertx.setTimer(2, new Handler<Long>() {
+        @Override
+        public void handle(Long event) {
+          if (System.currentTimeMillis() - start > 10000) {
+            log.warn("Timed out waiting for group information to appear");
+          } else if (!stopped) {
+            DefaultContext context = vertx.getContext();
+            try {
+              // Remove any context we have here (from the timer) otherwise will screw things up when modules are deployed
+              vertx.setContext(null);
+              checkQuorumWhenAdded(nodeID, start);
 
+            } finally {
+              vertx.setContext(context);
+            }
+          }
+        }
+      });
+    }
+  }
+
+  // Check if there is a quorum for our group
+  private void checkQuorum() {
     List<String> nodes = clusterManager.getNodes();
-    System.out.println("There are " + nodes.size() +" nodes");
     int count = 0;
     for (String node: nodes) {
       String json = clusterMap.get(node);
-      System.out.println("json is " + json);
       if (json != null) {
         JsonObject clusterInfo = new JsonObject(json);
         String group = clusterInfo.getString("group");
@@ -197,16 +278,14 @@ public class HAManager {
         }
       }
     }
-    System.out.println("count is " + count);
     boolean attained = count >= quorumSize;
     if (!attainedQuorum && attained) {
       // A quorum has been attained so we can deploy any currently undeployed HA deployments
-      deployHADeployments();
+      this.attainedQuorum = true;
     } else if (attainedQuorum && !attained) {
       // We had a quorum but we lost it - we must undeploy any HA deployments
-      undeployHADeployments();
+      this.attainedQuorum = false;
     }
-    this.attainedQuorum = attained;
   }
 
   // Add some information on a deployment in the cluster so other nodes know about it
@@ -224,22 +303,38 @@ public class HAManager {
   // Add the deployment to an internal list of deployments - these will be executed when a quorum is attained
   private void addToHADeployList(final String moduleName, final JsonObject config, final int instances,
                                  final Handler<AsyncResult<String>> doneHandler) {
-    addToHADeployList(new Runnable() {
+    toDeployOnQuorum.add(new Runnable() {
       public void run() {
-        platformManager.deployModule(moduleName, config, instances, true, doneHandler);
+        DefaultContext ctx = vertx.getContext();
+        try {
+          vertx.setContext(null);
+          deployModule(moduleName, config, instances, doneHandler);
+        } finally {
+          vertx.setContext(ctx);
+        }
       }
     });
+   }
+
+  private void checkHADeployments() {
+    try {
+      if (attainedQuorum) {
+        deployHADeployments();
+      } else {
+        undeployHADeployments();
+      }
+    } catch (Throwable t) {
+      log.error("Failed when checking HA deployments", t);
+    }
   }
 
-  // Undeploy all HA deployments
-  // Note - this methods blocks until undeployment is complete and we use a semaphore to ensure no deployment occurs
-  // during this period
+  // Undeploy any HA deployments now there is no quorum
   private void undeployHADeployments() {
-    try {
-      sem.acquire();
-      for (final Map.Entry<String, Deployment> entry: platformManager.deployments().entrySet()) {
-        if (entry.getValue().ha) {
-          final CountDownLatch latch = new CountDownLatch(1);
+    for (final Map.Entry<String, Deployment> entry: platformManager.deployments().entrySet()) {
+      if (entry.getValue().ha) {
+        DefaultContext ctx = vertx.getContext();
+        try {
+          vertx.setContext(null);
           platformManager.undeploy(entry.getKey(), new AsyncResultHandler<Void>() {
             @Override
             public void handle(AsyncResult<Void> result) {
@@ -258,27 +353,19 @@ public class HAManager {
               } else {
                 log.error("Failed to undeploy deployment on lost quorum", result.cause());
               }
-              latch.countDown();
             }
           });
-          try {
-            if (!latch.await(300, TimeUnit.SECONDS)) {
-              throw new IllegalStateException("Timed out waiting to undeploy");
-            }
-          } catch (InterruptedException e) {
-            throw new IllegalStateException(e);
-          }
+        } finally {
+          vertx.setContext(ctx);
         }
       }
-    } catch (InterruptedException e) {
-      throw new IllegalStateException(e);
-    } finally {
-      sem.release();
     }
   }
 
+  // Deploy any deployments that are waiting for a quorum
   private void deployHADeployments() {
-    for (final Runnable task: toDeployOnQuorum) {
+    // Make a copy to avoid comod exceptions
+    for (final Runnable task: new ArrayList<>(toDeployOnQuorum)) {
       try {
         task.run();
       } catch (Throwable t) {
@@ -288,26 +375,18 @@ public class HAManager {
     toDeployOnQuorum.clear();
   }
 
-  private synchronized void addToHADeployList(Runnable task) {
-    toDeployOnQuorum.add(task);
-  }
-
-  /*
-  We work out which node will take over the failed node - the results of this calculation
-  should be exactly the same on every node, so only one node will actually take it on
-  Consequently it's crucial that the calculation done in chooseHashedNode takes place only locally
-   */
+  // Handle failover
   private void checkFailover(String failedNodeID, JsonObject theHAInfo) {
     try {
-      JsonArray apps = theHAInfo.getArray("mods");
+      JsonArray deployments = theHAInfo.getArray("mods");
       String group = theHAInfo.getString("group");
       String chosen = chooseHashedNode(group, failedNodeID.hashCode());
       if (chosen != null && chosen.equals(this.nodeID)) {
-        log.info("Node " + failedNodeID + " has failed. This node will deploy " + apps.size() + " deployments from that node.");
-        if (apps != null) {
-          for (Object obj: apps) {
+        log.info("Node " + failedNodeID + " has failed. This node will deploy " + deployments.size() + " deployments from that node.");
+        if (deployments != null) {
+          for (Object obj: deployments) {
             JsonObject app = (JsonObject)obj;
-            handleFailover(app);
+            processFailover(app);
           }
         }
         // Failover is complete! We can now remove the failed node from the cluster map
@@ -318,15 +397,15 @@ public class HAManager {
       }
     } catch (Throwable t) {
       log.error("Failed to handle failover", t);
+      // This is used for testing:
       if (failoverCompleteHandler != null) {
         failoverCompleteHandler.handle(false);
       }
     }
   }
 
-  // Handle the failover of a module
-  private void handleFailover(JsonObject failedModule) {
-    System.out.println("Handling failover of " + failedModule);
+  // Process the failover of a deployment
+  private void processFailover(JsonObject failedModule) {
     if (failDuringFailover) {
       throw new VertxException("Oops!");
     }
@@ -360,13 +439,7 @@ public class HAManager {
     }
   }
 
-  /*
-  We use the hashcode of the failed nodeid to choose a node to failover onto.
-  Each node is guaranteed to see the exact list of nodes in the cluster for the exact same membership event
-  Therefore each node will compute the same value.
-  If the computed node equals the current node, the node knows that it is the one to handle failover for the
-  deployment
-   */
+  // Compute the failover node
   private String chooseHashedNode(String group, int hashCode) {
     List<String> nodes = clusterManager.getNodes();
     ArrayList<String> matchingMembers = new ArrayList<>();

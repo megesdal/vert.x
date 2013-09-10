@@ -38,7 +38,7 @@ public interface ClusterManager {
 
   List<String> getNodes();
 
-  void setNodeListener(NodeListener listener);
+  void nodeListener(NodeListener listener);
 
   void join();
 

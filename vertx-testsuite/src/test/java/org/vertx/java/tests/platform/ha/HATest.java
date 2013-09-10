@@ -32,7 +32,8 @@ public class HATest extends TestCase {
 
   protected void setUp() throws Exception {
     super.setUp();
-    System.setProperty("vertx.mods", "vertx-testsuite/src/test/mod-test");
+    System.setProperty("vertx.mods", "src/test/mod-test");
+    //System.setProperty("vertx.mods", "vertx-testsuite/src/test/mod-test");
   }
 
   protected void tearDown() throws Exception {
@@ -300,12 +301,127 @@ public class HATest extends TestCase {
     // Now deploy another node
     cluster.addNode(new NodeMods("group1", 2));
 
+    // Should now be deployed
+    cluster.checkModulesDeployed(0, mods);
+
+    cluster.closeCluster();
+  }
+
+  public void testQuorumMultipleSameNode() throws Exception {
+    Cluster cluster = new Cluster();
+    cluster.nodes.add(new NodeMods("group1", 2));
+    cluster.createCluster();
+
+    NodeMods mods = new NodeMods().addDeployment(new DepInfo("io.vertx~ha-test1~1.0")).addDeployment(new DepInfo("io.vertx~ha-test2~1.0"));
+    cluster.deployModsNoCheck(0, mods);
+
     Thread.sleep(500);
+    // Make sure it doesn't deploy yet - we don't have a quorum
+    assertTrue(cluster.pms.get(0).getDeployments().isEmpty());
+
+    // Now deploy another node
+    cluster.addNode(new NodeMods("group1", 2));
 
     // Should now be deployed
     cluster.checkModulesDeployed(0, mods);
 
-    //cluster.nodes.add(new NodeMods("group1", 2));
+    cluster.closeCluster();
+  }
+
+  public void testQuorumSeveralNodes() throws Exception {
+    Cluster cluster = new Cluster();
+    cluster.nodes.add(new NodeMods("group1", 4));
+    cluster.nodes.add(new NodeMods("group1", 4));
+    cluster.nodes.add(new NodeMods("group1", 4));
+    cluster.createCluster();
+
+    NodeMods mods0 = new NodeMods().addDeployment(new DepInfo("io.vertx~ha-test1~1.0")).addDeployment(new DepInfo("io.vertx~ha-test2~1.0"));
+    NodeMods mods1 = new NodeMods().addDeployment(new DepInfo("io.vertx~ha-test1~1.0")).addDeployment(new DepInfo("io.vertx~ha-test2~1.0"));
+    NodeMods mods2 = new NodeMods().addDeployment(new DepInfo("io.vertx~ha-test1~1.0")).addDeployment(new DepInfo("io.vertx~ha-test2~1.0"));
+    cluster.deployModsNoCheck(0, mods0);
+    cluster.deployModsNoCheck(1, mods1);
+    cluster.deployModsNoCheck(2, mods2);
+
+    Thread.sleep(500);
+    // Make sure they don't deploy yet - we don't have a quorum
+    assertTrue(cluster.pms.get(0).getDeployments().isEmpty());
+    assertTrue(cluster.pms.get(1).getDeployments().isEmpty());
+    assertTrue(cluster.pms.get(2).getDeployments().isEmpty());
+
+    // Now deploy another node
+    cluster.addNode(new NodeMods("group1", 4));
+
+    // Should now be deployed
+    cluster.checkModulesDeployed(0, mods0);
+    cluster.checkModulesDeployed(1, mods1);
+    cluster.checkModulesDeployed(2, mods2);
+
+    cluster.closeCluster();
+  }
+
+  public void testQuorumNoQuorum() throws Exception {
+    Cluster cluster = new Cluster();
+    cluster.nodes.add(new NodeMods("group1", 2));
+    cluster.createCluster();
+
+    NodeMods mods0 = new NodeMods().addDeployment(new DepInfo("io.vertx~ha-test1~1.0")).addDeployment(new DepInfo("io.vertx~ha-test2~1.0"));
+    cluster.deployModsNoCheck(0, mods0);
+
+    Thread.sleep(500);
+    // Make sure they don't deploy yet - we don't have a quorum
+    assertTrue(cluster.pms.get(0).getDeployments().isEmpty());
+
+    // Now deploy another node
+    cluster.addNode(new NodeMods("group1", 2));
+
+    // Should now be deployed
+    cluster.checkModulesDeployed(0, mods0);
+
+    //Now close node
+    cluster.closeNode(1);
+
+    // Now we have no quorum
+
+    cluster.checkNoModulesDeployed(0);
+
+    //Now add another node
+    cluster.addNode(new NodeMods("group1", 2));
+
+    // Should now be deployed again
+    cluster.checkModulesDeployedStill(0);
+
+    cluster.closeCluster();
+  }
+
+  public void testQuorumWithGroups() throws Exception {
+    Cluster cluster = new Cluster();
+    cluster.nodes.add(new NodeMods("group1", 3));
+    cluster.nodes.add(new NodeMods("group1", 3));
+    cluster.nodes.add(new NodeMods("group2", 1));
+    cluster.createCluster();
+
+    NodeMods mods0 = new NodeMods().addDeployment(new DepInfo("io.vertx~ha-test1~1.0")).addDeployment(new DepInfo("io.vertx~ha-test2~1.0"));
+    NodeMods mods1 = new NodeMods().addDeployment(new DepInfo("io.vertx~ha-test1~1.0")).addDeployment(new DepInfo("io.vertx~ha-test2~1.0"));
+    NodeMods mods2 = new NodeMods().addDeployment(new DepInfo("io.vertx~ha-test1~1.0")).addDeployment(new DepInfo("io.vertx~ha-test2~1.0"));
+    cluster.deployModsNoCheck(0, mods0);
+    cluster.deployModsNoCheck(1, mods1);
+    cluster.deployModsNoCheck(2, mods2);
+
+    Thread.sleep(500);
+    assertTrue(cluster.pms.get(0).getDeployments().isEmpty());
+    assertTrue(cluster.pms.get(1).getDeployments().isEmpty());
+    //Should be deployed on node 2
+    cluster.checkModulesDeployed(2, mods2);
+
+    // Now deploy another node
+    cluster.addNode(new NodeMods("group1", 3));
+
+    // Should now be deployed on all nodes
+    cluster.checkModulesDeployed(0, mods0);
+    cluster.checkModulesDeployed(1, mods1);
+    cluster.checkModulesDeployedStill(2);
+
+    cluster.closeCluster();
   }
 
   class Cluster {
@@ -371,13 +487,59 @@ public class HATest extends TestCase {
     void checkModulesDeployed(int node, NodeMods nodeMods) throws Exception {
       NodeMods existingMods = nodes.get(node);
       existingMods.deployments.addAll(nodeMods.deployments);
-      for (int i = 0; i < pms.size(); i++) {
-        NodeMods mods = nodes.get(i);
-        TestPlatformManager pm = pms.get(i);
-        assertEquals(mods.deployments.size(), pm.getDeployments().size());
-        for (DepInfo dep: mods.deployments) {
-          assertTrue(hasModule(dep.modName, pm.getDeployments()));
+      NodeMods mods = nodes.get(node);
+      TestPlatformManager pm = pms.get(node);
+      long start = System.currentTimeMillis();
+      outer: while (true) {
+        Thread.sleep(1);
+        if (System.currentTimeMillis() - start > 10000) {
+          throw new IllegalStateException("Timed out waiting for deployments");
         }
+        if (mods.deployments.size() != pm.getDeployments().size()) {
+          continue;
+        }
+        for (DepInfo dep: mods.deployments) {
+          if (!hasModule(dep.modName, pm.getDeployments())) {
+            continue outer;
+          }
+        }
+        break;
+      }
+    }
+
+    void checkModulesDeployedStill(int node) throws Exception {
+      NodeMods mods = nodes.get(node);
+      TestPlatformManager pm = pms.get(node);
+      long start = System.currentTimeMillis();
+      outer: while (true) {
+        Thread.sleep(1);
+        if (System.currentTimeMillis() - start > 10000) {
+          throw new IllegalStateException("Timed out waiting for deployments");
+        }
+        if (mods.deployments.size() != pm.getDeployments().size()) {
+          continue;
+        }
+        for (DepInfo dep: mods.deployments) {
+          if (!hasModule(dep.modName, pm.getDeployments())) {
+            continue outer;
+          }
+        }
+        break;
+      }
+    }
+
+    void checkNoModulesDeployed(int node) throws Exception {
+      TestPlatformManager pm = pms.get(node);
+      long start = System.currentTimeMillis();
+      outer: while (true) {
+        Thread.sleep(1);
+        if (System.currentTimeMillis() - start > 10000) {
+          throw new IllegalStateException("Timed out waiting for deployments");
+        }
+        if (!pm.getDeployments().isEmpty()) {
+          continue;
+        }
+        break;
       }
     }
 
