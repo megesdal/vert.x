@@ -1,5 +1,3 @@
-package org.vertx.java.core.spi;
-
 /*
  * Copyright 2013 Red Hat, Inc.
  *
@@ -15,6 +13,12 @@ package org.vertx.java.core.spi;
  * License for the specific language governing permissions and limitations
  * under the License.
  *
+ */
+
+package org.vertx.java.core.spi;
+
+/**
+ *  @author <a href="http://tfox.org">Tim Fox</a>
  */
 public interface Action<T> {
   T perform();

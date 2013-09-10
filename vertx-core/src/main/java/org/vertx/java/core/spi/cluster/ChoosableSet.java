@@ -1,11 +1,3 @@
-package org.vertx.java.core.spi.cluster;
-
-import org.vertx.java.core.impl.ConcurrentHashSet;
-
-import java.util.Iterator;
-import java.util.NoSuchElementException;
-import java.util.Set;
-
 /*
  * Copyright 2013 Red Hat, Inc.
  *
@@ -21,6 +13,19 @@ import java.util.Set;
  * License for the specific language governing permissions and limitations
  * under the License.
  *
+ */
+
+package org.vertx.java.core.spi.cluster;
+
+import org.vertx.java.core.impl.ConcurrentHashSet;
+
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.Set;
+
+/**
+ *
+ * @author <a href="http://tfox.org">Tim Fox</a>
  */
 public class ChoosableSet<T> implements Iterable<T> {
 

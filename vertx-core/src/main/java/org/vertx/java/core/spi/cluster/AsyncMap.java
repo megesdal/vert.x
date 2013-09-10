@@ -22,14 +22,36 @@ import org.vertx.java.core.Handler;
 
 
 /**
+ *
+ * An asynchronous map.
+ *
+ * The cluster implementation should ensure that any entries placed in the map from any node are available on any
+ * node of the cluster.
+ *
  * @author <a href="http://tfox.org">Tim Fox</a>
  *
  */
 public interface AsyncMap<K, V> {
 
+  /**
+   * Get a value from the map, asynchronously.
+   * @param k The key
+   * @param resultHandler - this will be called some time later with the async result.
+   */
   void get(K k, Handler<AsyncResult<V>> resultHandler);
 
+  /**
+   * Put a value in the map, asynchronously.
+   * @param k The key
+   * @param v The value
+   * @param completionHandler - this will be called some time later to signify the value has been put
+   */
   void put(K k, V v, Handler<AsyncResult<Void>> completionHandler);
 
+  /**
+   * Remove a value from the map, asynchronously.
+   * @param k The key
+   * @param completionHandler - this will be called some time later to signify the value has been removed
+   */
   void remove(K k, Handler<AsyncResult<Void>> completionHandler);
 }
