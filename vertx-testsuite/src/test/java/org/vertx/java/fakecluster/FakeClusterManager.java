@@ -2,16 +2,15 @@ package org.vertx.java.fakecluster;
 
 import org.vertx.java.core.AsyncResult;
 import org.vertx.java.core.Handler;
-import org.vertx.java.core.spi.cluster.ChoosableSet;
 import org.vertx.java.core.spi.Action;
 import org.vertx.java.core.spi.VertxSPI;
-import org.vertx.java.core.spi.cluster.AsyncMap;
-import org.vertx.java.core.spi.cluster.AsyncMultiMap;
-import org.vertx.java.core.spi.cluster.ClusterManager;
-import org.vertx.java.core.spi.cluster.NodeListener;
+import org.vertx.java.core.spi.cluster.*;
 
 import java.util.*;
-import java.util.concurrent.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /*
  * Copyright 2013 Red Hat, Inc.

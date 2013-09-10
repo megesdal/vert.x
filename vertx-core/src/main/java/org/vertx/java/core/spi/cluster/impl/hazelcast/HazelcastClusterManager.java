@@ -19,12 +19,12 @@ package org.vertx.java.core.spi.cluster.impl.hazelcast;
 import com.hazelcast.config.Config;
 import com.hazelcast.config.XmlConfigBuilder;
 import com.hazelcast.core.*;
-import org.vertx.java.core.spi.VertxSPI;
-import org.vertx.java.core.spi.cluster.AsyncMap;
-import org.vertx.java.core.spi.cluster.ClusterManager;
-import org.vertx.java.core.spi.cluster.AsyncMultiMap;
 import org.vertx.java.core.logging.Logger;
 import org.vertx.java.core.logging.impl.LoggerFactory;
+import org.vertx.java.core.spi.VertxSPI;
+import org.vertx.java.core.spi.cluster.AsyncMap;
+import org.vertx.java.core.spi.cluster.AsyncMultiMap;
+import org.vertx.java.core.spi.cluster.ClusterManager;
 import org.vertx.java.core.spi.cluster.NodeListener;
 
 import java.io.BufferedInputStream;

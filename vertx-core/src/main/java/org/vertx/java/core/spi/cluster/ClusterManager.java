@@ -52,7 +52,7 @@ public interface ClusterManager {
   <K, V> AsyncMap<K, V> getAsyncMap(String name);
 
   /**
-   * Return an sync map for the given name
+   * Return a synchronous map for the given name
    */
   <K, V> Map<K, V> getSyncMap(String name);
 

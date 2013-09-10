@@ -1,8 +1,6 @@
 package org.vertx.java.tests.platform.ha;
 
 import org.vertx.java.core.Handler;
-import org.vertx.java.core.VertxException;
-import org.vertx.java.core.json.JsonObject;
 import org.vertx.java.platform.impl.DefaultPlatformManager;
 import org.vertx.java.platform.impl.Deployment;
 

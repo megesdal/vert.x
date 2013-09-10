@@ -21,13 +21,13 @@ import com.hazelcast.core.EntryListener;
 import org.vertx.java.core.AsyncResult;
 import org.vertx.java.core.AsyncResultHandler;
 import org.vertx.java.core.Handler;
-import org.vertx.java.core.spi.cluster.ChoosableSet;
-import org.vertx.java.core.spi.Action;
-import org.vertx.java.core.spi.VertxSPI;
-import org.vertx.java.core.spi.cluster.AsyncMultiMap;
 import org.vertx.java.core.impl.DefaultFutureResult;
 import org.vertx.java.core.logging.Logger;
 import org.vertx.java.core.logging.impl.LoggerFactory;
+import org.vertx.java.core.spi.Action;
+import org.vertx.java.core.spi.VertxSPI;
+import org.vertx.java.core.spi.cluster.AsyncMultiMap;
+import org.vertx.java.core.spi.cluster.ChoosableSet;
 
 import java.util.Collection;
 import java.util.Map;

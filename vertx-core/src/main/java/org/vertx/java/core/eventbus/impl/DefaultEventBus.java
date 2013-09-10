@@ -37,9 +37,9 @@ import org.vertx.java.core.net.NetServer;
 import org.vertx.java.core.net.NetSocket;
 import org.vertx.java.core.net.impl.ServerID;
 import org.vertx.java.core.parsetools.RecordParser;
+import org.vertx.java.core.spi.cluster.AsyncMultiMap;
 import org.vertx.java.core.spi.cluster.ChoosableSet;
 import org.vertx.java.core.spi.cluster.ClusterManager;
-import org.vertx.java.core.spi.cluster.AsyncMultiMap;
 
 import java.util.List;
 import java.util.Queue;

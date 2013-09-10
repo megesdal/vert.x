@@ -17,7 +17,10 @@
 package org.vertx.java.platform.impl;
 
 
-import org.vertx.java.core.*;
+import org.vertx.java.core.AsyncResult;
+import org.vertx.java.core.AsyncResultHandler;
+import org.vertx.java.core.Handler;
+import org.vertx.java.core.Vertx;
 import org.vertx.java.core.file.impl.ClasspathPathResolver;
 import org.vertx.java.core.file.impl.ModuleFileSystemPathResolver;
 import org.vertx.java.core.impl.*;
@@ -38,8 +41,8 @@ import java.net.URLClassLoader;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
